@@ -18,8 +18,13 @@ export const SavedSearchesPage: React.FC = () => {
   // Form states
   const [query, setQuery] = useState<string>(searchParams.get('query') || '');
   const [category, setCategory] = useState<string>(searchParams.get('category') || 'ALL');
-  const [maxPriceRupees, setMaxPriceRupees] = useState<string>('');
-  const [condition, setCondition] = useState<string>(searchParams.get('condition') || 'ANY');
+  const [minPriceRupees, setMinPriceRupees] = useState<string>(searchParams.get('minPrice') || '');
+  const [maxPriceRupees, setMaxPriceRupees] = useState<string>(searchParams.get('maxPrice') || '');
+  const [condition, setCondition] = useState<string>(() => {
+    const initialCondition = searchParams.get('condition');
+    return !initialCondition || initialCondition === 'ALL' ? 'ANY' : initialCondition;
+  });
+  const [closingSoon, setClosingSoon] = useState<boolean>(searchParams.get('closingSoon') === 'true');
   const [formLoading, setFormLoading] = useState<boolean>(false);
 
   const fetchSavedSearches = async () => {
@@ -50,8 +55,18 @@ export const SavedSearchesPage: React.FC = () => {
       return;
     }
 
-    if (!query.trim() && category === 'ALL') {
-      showToast('Please provide a keyword or select a category.', 'error');
+    const minPrice = minPriceRupees === '' ? undefined : Number(minPriceRupees);
+    const maxPrice = maxPriceRupees === '' ? undefined : Number(maxPriceRupees);
+    if (
+      [minPrice, maxPrice].some((price) => price !== undefined && (!Number.isFinite(price) || price < 0)) ||
+      (minPrice !== undefined && maxPrice !== undefined && minPrice > maxPrice)
+    ) {
+      showToast('Enter a valid price range with minimum no greater than maximum.', 'error');
+      return;
+    }
+
+    if (!query.trim() && category === 'ALL' && minPrice === undefined && maxPrice === undefined && condition === 'ANY' && !closingSoon) {
+      showToast('Add at least one filter before saving an alert.', 'error');
       return;
     }
 
@@ -62,17 +77,21 @@ export const SavedSearchesPage: React.FC = () => {
         {
           query: query.trim() || undefined,
           category: category !== 'ALL' ? category : undefined,
-          maxPriceRupees: maxPriceRupees ? parseInt(maxPriceRupees, 10) : undefined,
+          minPriceRupees: minPrice,
+          maxPriceRupees: maxPrice,
           condition: condition !== 'ANY' ? condition : undefined,
+          closingSoon,
         }
       );
 
       if (res.success) {
         showToast(res.message, 'success');
         setQuery('');
+        setMinPriceRupees('');
         setMaxPriceRupees('');
         setCategory('ALL');
         setCondition('ANY');
+        setClosingSoon(false);
         fetchSavedSearches();
       }
     } catch (err: any) {
@@ -122,6 +141,7 @@ export const SavedSearchesPage: React.FC = () => {
               </label>
               <input
                 type="text"
+                maxLength={100}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="e.g. Casio fx-991EX, Hero Cycle..."
@@ -145,38 +165,67 @@ export const SavedSearchesPage: React.FC = () => {
                 <option value="ELECTRONICS">Electronics & Tech</option>
                 <option value="DORM_LIVING">Dorm & Living</option>
                 <option value="LAB_EQUIPMENT">Lab Gear & Kits</option>
+                <option value="OTHER">Other Campus Essentials</option>
               </select>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Max Price (₹)
+                  Minimum Price (₹)
                 </label>
                 <input
                   type="number"
-                  placeholder="e.g. 500"
+                  min="0"
+                  step="0.01"
+                  placeholder="Optional"
+                  value={minPriceRupees}
+                  onChange={(e) => setMinPriceRupees(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:bg-white focus:outline-none focus:border-indigo-600"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Maximum Price (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Optional"
                   value={maxPriceRupees}
                   onChange={(e) => setMaxPriceRupees(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:bg-white focus:outline-none focus:border-indigo-600"
                 />
               </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Min Condition
-                </label>
-                <select
-                  value={condition}
-                  onChange={(e) => setCondition(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:bg-white focus:outline-none focus:border-indigo-600"
-                >
-                  <option value="ANY">Any Condition</option>
-                  <option value="LIKE_NEW">Like New or Better</option>
-                  <option value="GOOD">Good or Better</option>
-                </select>
-              </div>
             </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Condition
+              </label>
+              <select
+                value={condition}
+                onChange={(e) => setCondition(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:bg-white focus:outline-none focus:border-indigo-600"
+              >
+                <option value="ANY">Any Condition</option>
+                <option value="BRAND_NEW">Brand New</option>
+                <option value="LIKE_NEW">Like New</option>
+                <option value="GOOD">Good</option>
+                <option value="FAIR">Fair</option>
+              </select>
+            </div>
+
+            <label className="flex items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={closingSoon}
+                onChange={(event) => setClosingSoon(event.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              Only alert when the auction closes within 2 hours
+            </label>
 
             <button
               type="submit"
@@ -224,13 +273,17 @@ export const SavedSearchesPage: React.FC = () => {
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-slate-500 flex items-center gap-3">
-                      {s.maxPricePaise && (
+                    <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {s.minPricePaise !== undefined && (
+                        <span>From <strong>{formatRupees(s.minPricePaise)}</strong></span>
+                      )}
+                      {s.maxPricePaise !== undefined && (
                         <span>Up to <strong>{formatRupees(s.maxPricePaise)}</strong></span>
                       )}
                       {s.condition && (
                         <span>• Condition: <strong>{s.condition.replace(/_/g, ' ')}</strong></span>
                       )}
+                      {s.closingSoon && <span>• Closes within 2h</span>}
                       <span>• Created {new Date(s.createdAt).toLocaleDateString()}</span>
                     </div>
                   </div>

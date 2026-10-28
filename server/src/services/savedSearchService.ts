@@ -5,6 +5,8 @@ import { paiseToRupees } from '../utils/currency.js';
 
 export const checkSavedSearchesForListing = async (listing: IListing): Promise<void> => {
   try {
+    if (listing.status !== 'ACTIVE' || listing.closingTime.getTime() <= Date.now()) return;
+
     const activeSearches = await SavedSearch.find({
       isActive: true,
       user: { $ne: listing.seller },
@@ -18,8 +20,11 @@ export const checkSavedSearchesForListing = async (listing: IListing): Promise<v
         matches = false;
       }
 
-      // Max price filter
-      if (matches && search.maxPricePaise && listing.startingPricePaise > search.maxPricePaise) {
+      if (matches && search.minPricePaise !== undefined && listing.currentPricePaise < search.minPricePaise) {
+        matches = false;
+      }
+
+      if (matches && search.maxPricePaise !== undefined && listing.currentPricePaise > search.maxPricePaise) {
         matches = false;
       }
 
@@ -28,14 +33,17 @@ export const checkSavedSearchesForListing = async (listing: IListing): Promise<v
         matches = false;
       }
 
-      // Query keyword match
       if (matches && search.query && search.query.trim().length > 0) {
-        const regex = new RegExp(search.query.trim(), 'i');
-        const titleMatch = regex.test(listing.title);
-        const descMatch = regex.test(listing.description);
-        if (!titleMatch && !descMatch) {
+        const terms = search.query.trim().split(/\s+/).map((term) => term.toLocaleLowerCase());
+        const listingText = `${listing.title} ${listing.description}`.toLocaleLowerCase();
+        if (!terms.some((term) => listingText.includes(term))) {
           matches = false;
         }
+      }
+
+      if (matches && search.closingSoon) {
+        const remainingMs = listing.closingTime.getTime() - Date.now();
+        if (remainingMs <= 0 || remainingMs > 2 * 60 * 60 * 1000) matches = false;
       }
 
       if (matches) {
@@ -44,7 +52,7 @@ export const checkSavedSearchesForListing = async (listing: IListing): Promise<v
           recipientId: search.user.toString(),
           type: 'SAVED_SEARCH_MATCH',
           title: 'New Matching Campus Item! 🎯',
-          message: `"${listing.title}" matches your saved search (Starting at ₹${paiseToRupees(listing.startingPricePaise)}).`,
+          message: `"${listing.title}" matches your saved search (Current price ₹${paiseToRupees(listing.currentPricePaise)}).`,
           link: `/auctions/${listing._id}`,
           metadata: { listingId: listing._id, savedSearchId: search._id },
         });

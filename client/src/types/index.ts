@@ -90,8 +90,10 @@ export interface SavedSearch {
   _id: string;
   query?: string;
   category?: string;
+  minPricePaise?: number;
   maxPricePaise?: number;
   condition?: string;
+  closingSoon?: boolean;
   createdAt: string;
 }
 

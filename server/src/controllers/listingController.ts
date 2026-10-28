@@ -527,6 +527,38 @@ export const getListings = async (req: Request, res: Response): Promise<void> =>
       limit = 12,
     } = req.query;
 
+    const categories = ['CYCLES', 'CALCULATORS', 'TEXTBOOKS', 'ELECTRONICS', 'DORM_LIVING', 'LAB_EQUIPMENT', 'OTHER'];
+    const conditions = ['BRAND_NEW', 'LIKE_NEW', 'GOOD', 'FAIR'];
+    const parseFilterPrice = (value: unknown): number | undefined | null => {
+      if (value === undefined || value === '') return undefined;
+      if (typeof value !== 'string') return null;
+      if (!/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(value.trim())) return null;
+      const rupees = Number(value);
+      const paise = rupeesToPaise(rupees);
+      return Number.isFinite(rupees) && rupees >= 0 && Number.isSafeInteger(paise) ? paise : null;
+    };
+    const minPricePaise = parseFilterPrice(minPrice);
+    const maxPricePaise = parseFilterPrice(maxPrice);
+    const pageNumber = Number(page);
+    const pageSize = Number(limit);
+    if (
+      minPricePaise === null ||
+      maxPricePaise === null ||
+      (minPricePaise !== undefined && maxPricePaise !== undefined && minPricePaise > maxPricePaise) ||
+      (category !== undefined && (typeof category !== 'string' || (category !== 'ALL' && !categories.includes(category)))) ||
+      (condition !== undefined && (typeof condition !== 'string' || (condition !== 'ALL' && !conditions.includes(condition)))) ||
+      (search !== undefined && (typeof search !== 'string' || search.length > 100)) ||
+      (closingSoon !== undefined && closingSoon !== 'true' && closingSoon !== 'false') ||
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      !Number.isInteger(pageSize) ||
+      pageSize < 1 ||
+      pageSize > 100
+    ) {
+      res.status(400).json({ success: false, message: 'Invalid auction search filters.' });
+      return;
+    }
+
     const filter: any = {};
 
     // Default status: ACTIVE unless specified
@@ -545,10 +577,10 @@ export const getListings = async (req: Request, res: Response): Promise<void> =>
     }
 
     // Price filter (stored in paise)
-    if (minPrice || maxPrice) {
+    if (minPricePaise !== undefined || maxPricePaise !== undefined) {
       filter.currentPricePaise = {};
-      if (minPrice) filter.currentPricePaise.$gte = rupeesToPaise(Number(minPrice));
-      if (maxPrice) filter.currentPricePaise.$lte = rupeesToPaise(Number(maxPrice));
+      if (minPricePaise !== undefined) filter.currentPricePaise.$gte = minPricePaise;
+      if (maxPricePaise !== undefined) filter.currentPricePaise.$lte = maxPricePaise;
     }
 
     // Closing soon filter (e.g. within next 2 hours)
@@ -575,13 +607,13 @@ export const getListings = async (req: Request, res: Response): Promise<void> =>
       sortOptions = { bidCount: -1 };
     }
 
-    const skip = (Number(page) - 1) * Number(limit);
+    const skip = (pageNumber - 1) * pageSize;
 
     const [listings, totalCount] = await Promise.all([
       Listing.find(filter)
         .sort(sortOptions)
         .skip(skip)
-        .limit(Number(limit))
+        .limit(pageSize)
         .populate('seller', 'name department avatarUrl isCampusVerified')
         .populate('leadingBidder', 'name'),
       Listing.countDocuments(filter),
@@ -620,10 +652,10 @@ export const getListings = async (req: Request, res: Response): Promise<void> =>
       success: true,
       listings: sanitizedListings,
       pagination: {
-        page: Number(page),
-        limit: Number(limit),
+        page: pageNumber,
+        limit: pageSize,
         totalCount,
-        totalPages: Math.ceil(totalCount / Number(limit)),
+        totalPages: Math.ceil(totalCount / pageSize),
       },
     });
   } catch (error: any) {

@@ -37,6 +37,14 @@ export const AuctionsPage: React.FC = () => {
   const page = parseInt(searchParams.get('page') || '1', 10);
 
   const [mobileFilterOpen, setMobileFilterOpen] = useState<boolean>(false);
+  const savedSearchParams = new URLSearchParams();
+  if (search) savedSearchParams.set('query', search);
+  if (category !== 'ALL') savedSearchParams.set('category', category);
+  if (condition !== 'ALL') savedSearchParams.set('condition', condition);
+  if (minPrice) savedSearchParams.set('minPrice', minPrice);
+  if (maxPrice) savedSearchParams.set('maxPrice', maxPrice);
+  if (closingSoon) savedSearchParams.set('closingSoon', 'true');
+  const savedSearchUrl = `/saved-searches?${savedSearchParams.toString()}`;
 
   useEffect(() => {
     const fetchListings = async () => {
@@ -115,7 +123,7 @@ export const AuctionsPage: React.FC = () => {
         <div className="flex items-center gap-2 w-full md:w-auto">
           {/* Save this search button */}
           <Link
-            to={`/saved-searches?query=${encodeURIComponent(search)}&category=${category}&condition=${condition}`}
+            to={savedSearchUrl}
             className="hidden sm:inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-semibold border border-indigo-200/80 transition"
           >
             <BookmarkPlus className="w-4 h-4" />
@@ -286,7 +294,7 @@ export const AuctionsPage: React.FC = () => {
                   Clear Filters
                 </button>
                 <Link
-                  to={`/saved-searches?query=${encodeURIComponent(search)}`}
+                  to={savedSearchUrl}
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition"
                 >
                   Save As Alert

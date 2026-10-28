@@ -109,6 +109,7 @@ const runTests = async () => {
         answer?: string;
         answerEditedAt?: string;
       }>;
+      savedSearch?: { _id?: string; minPricePaise?: number; maxPricePaise?: number; closingSoon?: boolean };
     }
     const apiRequest = async (
       endpoint: string,
@@ -157,6 +158,44 @@ const runTests = async () => {
       !!buyerLogin.body.token &&
       sellerLogin.body.user?.id !== buyerLogin.body.user?.id,
       'Register and log in as two distinct users through the API'
+    );
+
+    const savedRangeResponse = await apiRequest('/saved-searches', 'POST', {
+      query: 'demo cycle',
+      category: 'CYCLES',
+      minPriceRupees: 125.5,
+      maxPriceRupees: 900,
+      condition: 'GOOD',
+      closingSoon: true,
+    }, buyerLogin.body.token);
+    const savedRangeSearch = savedRangeResponse.body.savedSearch?._id
+      ? await SavedSearch.findById(savedRangeResponse.body.savedSearch._id)
+      : null;
+    const invertedSavedRange = await apiRequest('/saved-searches', 'POST', {
+      query: 'cycle',
+      minPriceRupees: 900,
+      maxPriceRupees: 100,
+    }, buyerLogin.body.token);
+    const invalidSavedCategory = await apiRequest('/saved-searches', 'POST', {
+      category: 'NOT_A_CATEGORY',
+    }, buyerLogin.body.token);
+    const invalidSavedPricePrecision = await apiRequest('/saved-searches', 'POST', {
+      query: 'cycle',
+      minPriceRupees: 125.555,
+    }, buyerLogin.body.token);
+    const removeRangeSearch = savedRangeSearch
+      ? await apiRequest(`/saved-searches/${savedRangeSearch._id}`, 'DELETE', undefined, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    assert(
+      savedRangeResponse.status === 201 &&
+      savedRangeSearch?.minPricePaise === rupeesToPaise(125.5) &&
+      savedRangeSearch.maxPricePaise === rupeesToPaise(900) &&
+      savedRangeSearch.closingSoon === true &&
+      invertedSavedRange.status === 400 &&
+      invalidSavedCategory.status === 400 &&
+      invalidSavedPricePrecision.status === 400 &&
+      removeRangeSearch.status === 200,
+      'Saved search accepts valid price ranges and closing-soon filters, and rejects invalid criteria'
     );
 
     const validPng = Buffer.from(
@@ -236,6 +275,10 @@ const runTests = async () => {
       ? await apiRequest(`/auctions/${sellerListing.id}`, 'GET', undefined, sellerLogin.body.token)
       : { status: 0, body: {} as ApiResult };
     const invalidListingId = await apiRequest('/auctions/not-a-mongo-id');
+    const invalidBrowseRange = await apiRequest('/auctions?minPrice=900&maxPrice=100');
+    const invalidBrowsePricePrecision = await apiRequest('/auctions?minPrice=100.555');
+    const invalidBrowseCategory = await apiRequest('/auctions?category=NOT_A_CATEGORY');
+    const validBrowseRange = await apiRequest('/auctions?minPrice=1000&maxPrice=1000');
     const missingListingId = new mongoose.Types.ObjectId().toString();
     const missingListing = await apiRequest(`/auctions/${missingListingId}`);
     assert(
@@ -247,6 +290,11 @@ const runTests = async () => {
       detailFromSellerListing.status === 200 &&
       detailFromSellerListing.body.listing?.id === createdListingId &&
       invalidListingId.status === 400 &&
+      invalidBrowseRange.status === 400 &&
+      invalidBrowsePricePrecision.status === 400 &&
+      invalidBrowseCategory.status === 400 &&
+      validBrowseRange.status === 200 &&
+      validBrowseRange.body.listings?.some((item) => item.id === createdListingId) === true &&
       missingListing.status === 404 &&
       publicListing.body.listing?.currentPricePaise === rupeesToPaise(1000) &&
       !publicListing.body.listing?.seller?.email &&
@@ -848,7 +896,9 @@ const runTests = async () => {
       user: buyer1._id,
       query: 'Scientific calculator',
       category: 'CALCULATORS',
+      minPricePaise: rupeesToPaise(400),
       maxPricePaise: rupeesToPaise(600),
+      closingSoon: true,
       isActive: true,
     });
 
@@ -871,7 +921,41 @@ const runTests = async () => {
 
     await checkSavedSearchesForListing(matchingListing);
     const notifications = await Notification.find({ recipient: buyer1._id, type: 'SAVED_SEARCH_MATCH' });
-    assert(notifications.length === 1, 'Saved Search Alert Successfully Triggered & Stored in In-App Notification Center');
+    assert(
+      notifications.length === 1 &&
+      notifications[0].message.includes('Current price') &&
+      Boolean(notifications[0].metadata?.savedSearchId?.toString()),
+      'Saved Search Alert Matches current price, keyword, and closing-time filters'
+    );
+
+    await SavedSearch.create({
+      user: buyer2._id,
+      query: 'scientific calculator',
+      category: 'CALCULATORS',
+      maxPricePaise: rupeesToPaise(400),
+      isActive: true,
+    });
+    await checkSavedSearchesForListing(matchingListing);
+    const outOfRangeNotifications = await Notification.countDocuments({
+      recipient: buyer2._id,
+      type: 'SAVED_SEARCH_MATCH',
+    });
+    assert(outOfRangeNotifications === 0, 'Saved search does not alert when current price exceeds its maximum');
+
+    await SavedSearch.create({
+      user: buyer2._id,
+      query: '[invalid-regex',
+      isActive: true,
+    });
+    await checkSavedSearchesForListing(matchingListing);
+    const literalKeywordNotifications = await Notification.countDocuments({
+      recipient: buyer2._id,
+      type: 'SAVED_SEARCH_MATCH',
+    });
+    assert(
+      literalKeywordNotifications === 0,
+      'Saved search keywords are treated as literal text rather than regular expressions'
+    );
 
     // TEST 15: AI Assistant Search & Explicit Consent Protocol
     const aiSearch = await processAIRequest('Find me a calculator under 500');
