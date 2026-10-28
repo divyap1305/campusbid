@@ -6,6 +6,7 @@ import { createApp } from './app.js';
 import { connectDB } from './config/db.js';
 import { ENV } from './config/env.js';
 import { startScheduler } from './services/schedulerService.js';
+import { seedDatabase } from './utils/seedData.js';
 
 // Ensure uploads folder exists
 const uploadsDir = path.resolve('uploads');
@@ -47,6 +48,9 @@ io.on('connection', (socket) => {
 const startServer = async () => {
   await connectDB();
   
+  // Seed sample campus items if empty
+  await seedDatabase();
+
   // Start persistent auction lifecycle scheduler
   startScheduler(5000);
 
