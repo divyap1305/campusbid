@@ -56,6 +56,7 @@ export const AuctionDetailPage: React.FC = () => {
   const [questionLoading, setQuestionLoading] = useState<boolean>(false);
   const [replyingToId, setReplyingToId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState<string>('');
+  const [answerSaving, setAnswerSaving] = useState<boolean>(false);
 
   // Selected photo
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number>(0);
@@ -193,8 +194,14 @@ export const AuctionDetailPage: React.FC = () => {
         setQuestions((prev) =>
           prev.map((q) =>
             q.id === data.id
-              ? { ...q, answer: data.answer, answeredByName: data.answeredByName, answeredAt: data.answeredAt }
-              : q
+            ? {
+                ...q,
+                answer: data.answer,
+                answeredByName: data.answeredByName,
+                answeredAt: data.answeredAt,
+                answerEditedAt: data.answerEditedAt,
+              }
+            : q
           )
         );
       };
@@ -356,7 +363,7 @@ export const AuctionDetailPage: React.FC = () => {
       navigate('/login');
       return;
     }
-    if (!newQuestionText.trim()) return;
+    if (!newQuestionText.trim() || newQuestionText.trim().length > 500) return;
 
     setQuestionLoading(true);
     try {
@@ -377,18 +384,21 @@ export const AuctionDetailPage: React.FC = () => {
 
   // Answer Question (Seller only)
   const handleAnswerSubmit = async (questionId: string) => {
-    if (!replyText.trim()) return;
+    if (!replyText.trim() || replyText.trim().length > 500) return;
+    setAnswerSaving(true);
     try {
-      const res = await api.put<{ success: boolean }>(`/questions/${questionId}/answer`, {
+      const res = await api.put<{ success: boolean; message: string }>(`/questions/${questionId}/answer`, {
         answer: replyText,
       });
       if (res.success) {
         setReplyingToId(null);
         setReplyText('');
-        showToast('Answer posted!', 'success');
+        showToast(res.message, 'success');
       }
     } catch (err: any) {
       showToast(err.message || 'Failed to submit answer.', 'error');
+    } finally {
+      setAnswerSaving(false);
     }
   };
 
@@ -542,6 +552,7 @@ export const AuctionDetailPage: React.FC = () => {
                 <div className="relative">
                   <textarea
                     rows={2}
+                    maxLength={500}
                     value={newQuestionText}
                     onChange={(e) => setNewQuestionText(e.target.value)}
                     placeholder="Ask the seller about wear, accessories, campus meetup..."
@@ -549,9 +560,12 @@ export const AuctionDetailPage: React.FC = () => {
                   />
                 </div>
                 <div className="flex justify-end">
+                  <span className="mr-auto self-center text-[10px] text-slate-400">
+                    {newQuestionText.length}/500
+                  </span>
                   <button
                     type="submit"
-                    disabled={questionLoading || !newQuestionText.trim()}
+                    disabled={questionLoading || !newQuestionText.trim() || newQuestionText.trim().length > 500}
                     className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold transition disabled:opacity-40 flex items-center gap-1.5"
                   >
                     <Send className="w-3.5 h-3.5" />
@@ -586,33 +600,90 @@ export const AuctionDetailPage: React.FC = () => {
                       <div className="mt-3 pl-3.5 py-1 border-l-2 border-indigo-500 bg-indigo-50/50 rounded-r-xl p-2.5 space-y-1">
                         <div className="flex items-center gap-1.5 font-bold text-indigo-900 text-[11px]">
                           <span>Seller Answer ({q.answeredByName})</span>
+                          {q.answerEditedAt && (
+                            <span className="font-normal text-indigo-500">(edited)</span>
+                          )}
                         </div>
                         <p className="text-slate-700 leading-relaxed">{q.answer}</p>
+                        {isSeller && replyingToId !== q.id && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReplyingToId(q.id);
+                              setReplyText(q.answer || '');
+                            }}
+                            className="pt-1 text-indigo-600 font-bold hover:underline"
+                          >
+                            Edit answer
+                          </button>
+                        )}
+                        {isSeller && replyingToId === q.id && (
+                          <div className="space-y-2 pt-2">
+                            <textarea
+                              rows={3}
+                              maxLength={500}
+                              value={replyText}
+                              onChange={(event) => setReplyText(event.target.value)}
+                              aria-label="Edit seller answer"
+                              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs resize-y"
+                            />
+                            <div className="flex justify-between items-center">
+                              <span className="text-[10px] text-slate-400">{replyText.length}/500</span>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setReplyingToId(null);
+                                    setReplyText('');
+                                  }}
+                                  className="px-2.5 py-1 text-slate-500 text-xs"
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={answerSaving || !replyText.trim()}
+                                  onClick={() => handleAnswerSubmit(q.id)}
+                                  className="px-3 py-1 bg-indigo-600 text-white rounded-lg text-xs font-semibold disabled:opacity-40"
+                                >
+                                  {answerSaving ? 'Saving...' : 'Save answer'}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ) : isSeller ? (
                       <div className="mt-2 pt-2 border-t border-slate-200/60">
                         {replyingToId === q.id ? (
                           <div className="space-y-2">
-                            <input
-                              type="text"
+                            <textarea
+                              rows={3}
+                              maxLength={500}
                               value={replyText}
                               onChange={(e) => setReplyText(e.target.value)}
                               placeholder="Type your public answer..."
-                              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs"
+                              className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs resize-y"
                             />
-                            <div className="flex justify-end gap-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[10px] text-slate-400">{replyText.length}/500</span>
+                              <div className="flex gap-2">
                               <button
+                                type="button"
                                 onClick={() => setReplyingToId(null)}
                                 className="px-2.5 py-1 text-slate-500 text-xs"
                               >
                                 Cancel
                               </button>
                               <button
+                                type="button"
+                                disabled={answerSaving || !replyText.trim()}
                                 onClick={() => handleAnswerSubmit(q.id)}
-                                className="px-3 py-1 bg-indigo-600 text-white rounded-lg text-xs font-semibold"
+                                className="px-3 py-1 bg-indigo-600 text-white rounded-lg text-xs font-semibold disabled:opacity-40"
                               >
-                                Reply
+                                {answerSaving ? 'Saving...' : 'Reply'}
                               </button>
+                              </div>
                             </div>
                           </div>
                         ) : (

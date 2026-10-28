@@ -14,6 +14,7 @@ import { Notification } from '../models/Notification.js';
 import { AuditLog } from '../models/AuditLog.js';
 import { HandoverRecord } from '../models/HandoverRecord.js';
 import { AIActionConsent } from '../models/AIActionConsent.js';
+import { AuctionQuestion } from '../models/AuctionQuestion.js';
 import { connectDB } from '../config/db.js';
 import { placeBid, resolveProxyBids } from '../services/auctionService.js';
 import {
@@ -60,6 +61,7 @@ const runTests = async () => {
       Notification.deleteMany({}),
       HandoverRecord.deleteMany({}),
       AIActionConsent.deleteMany({}),
+      AuctionQuestion.deleteMany({}),
       AuditLog.deleteMany({}),
     ]);
 
@@ -73,6 +75,7 @@ const runTests = async () => {
     const apiBase = `http://127.0.0.1:${apiAddress.port}/api`;
     interface ApiResult {
       success?: boolean;
+      message?: string;
       token?: string;
       user?: { id: string; email?: string };
       listing?: {
@@ -94,6 +97,18 @@ const runTests = async () => {
       listings?: Array<{ _id?: string; id?: string }>;
       consentRequest?: { consentToken: string };
       url?: string;
+      question?: {
+        _id?: string;
+        id?: string;
+        answer?: string;
+        answerEditedAt?: string;
+      };
+      questions?: Array<{
+        id: string;
+        question: string;
+        answer?: string;
+        answerEditedAt?: string;
+      }>;
     }
     const apiRequest = async (
       endpoint: string,
@@ -237,6 +252,52 @@ const runTests = async () => {
       !publicListing.body.listing?.seller?.email &&
       !publicListing.body.listing?.seller?.phoneNumber,
       'Seller listing exposes a usable ID, detail lookup succeeds, and invalid or missing IDs are handled'
+    );
+
+    const invalidQuestionType = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/questions`, 'POST', { question: 25 }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const tooLongQuestion = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/questions`, 'POST', { question: 'q'.repeat(501) }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const askedQuestion = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/questions`, 'POST', { question: 'Could you confirm the pickup location?' }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const questionId = askedQuestion.body.question?._id;
+    const unauthorizedQuestionAnswer = questionId
+      ? await apiRequest(`/questions/${questionId}/answer`, 'PUT', { answer: 'Meet at the library.' }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const invalidAnswerType = questionId
+      ? await apiRequest(`/questions/${questionId}/answer`, 'PUT', { answer: 42 }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const tooLongAnswer = questionId
+      ? await apiRequest(`/questions/${questionId}/answer`, 'PUT', { answer: 'a'.repeat(501) }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const firstAnswer = questionId
+      ? await apiRequest(`/questions/${questionId}/answer`, 'PUT', { answer: 'Meet at the library entrance.' }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const correctedAnswer = questionId
+      ? await apiRequest(`/questions/${questionId}/answer`, 'PUT', { answer: 'Meet at the main library entrance at 4 PM.' }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const questionThread = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/questions`)
+      : { status: 0, body: {} as ApiResult };
+    assert(
+      invalidQuestionType.status === 400 &&
+      tooLongQuestion.status === 400 &&
+      askedQuestion.status === 201 &&
+      unauthorizedQuestionAnswer.status === 403 &&
+      invalidAnswerType.status === 400 &&
+      tooLongAnswer.status === 400 &&
+      firstAnswer.status === 200 &&
+      correctedAnswer.status === 200 &&
+      correctedAnswer.body.message === 'Answer updated publicly.' &&
+      questionThread.body.questions?.some((question) =>
+        question.id === questionId &&
+        question.answer === 'Meet at the main library entrance at 4 PM.' &&
+        Boolean(question.answerEditedAt)
+      ) === true,
+      'Auction Q&A validates length and types, protects seller replies, and supports answer corrections'
     );
 
     const sellerBid = createdListingId

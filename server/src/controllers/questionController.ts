@@ -9,6 +9,11 @@ import { maskStudentName } from '../services/auctionService.js';
 export const getQuestions = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id: listingId } = req.params;
+    if (!/^[a-f\d]{24}$/i.test(listingId)) {
+      res.status(400).json({ success: false, message: 'Invalid listing ID.' });
+      return;
+    }
+
     const questions = await AuctionQuestion.find({ listing: listingId })
       .sort({ createdAt: -1 })
       .populate('asker', 'name department')
@@ -20,6 +25,7 @@ export const getQuestions = async (req: Request, res: Response): Promise<void> =
       answer: q.answer,
       createdAt: q.createdAt,
       answeredAt: q.answeredAt,
+      answerEditedAt: q.answerEditedAt,
       askerName: q.asker ? maskStudentName((q.asker as any).name || 'Student') : 'Student',
       answeredByName: q.answeredBy ? maskStudentName((q.answeredBy as any).name || 'Seller') : null,
     }));
@@ -44,13 +50,18 @@ export const askQuestion = async (req: AuthRequest, res: Response): Promise<void
     const { id: listingId } = req.params;
     const { question } = req.body;
 
-    if (!question || !question.trim()) {
+    if (typeof question !== 'string' || !question.trim()) {
       res.status(400).json({ success: false, message: 'Question content cannot be empty.' });
       return;
     }
 
-    if (question.length > 500) {
+    if (question.trim().length > 500) {
       res.status(400).json({ success: false, message: 'Question cannot exceed 500 characters.' });
+      return;
+    }
+
+    if (!/^[a-f\d]{24}$/i.test(listingId)) {
+      res.status(400).json({ success: false, message: 'Invalid listing ID.' });
       return;
     }
 
@@ -108,8 +119,18 @@ export const answerQuestion = async (req: AuthRequest, res: Response): Promise<v
     const { questionId } = req.params;
     const { answer } = req.body;
 
-    if (!answer || !answer.trim()) {
+    if (typeof answer !== 'string' || !answer.trim()) {
       res.status(400).json({ success: false, message: 'Answer content cannot be empty.' });
+      return;
+    }
+
+    if (answer.trim().length > 500) {
+      res.status(400).json({ success: false, message: 'Answer cannot exceed 500 characters.' });
+      return;
+    }
+
+    if (!/^[a-f\d]{24}$/i.test(questionId)) {
+      res.status(400).json({ success: false, message: 'Invalid question ID.' });
       return;
     }
 
@@ -125,17 +146,21 @@ export const answerQuestion = async (req: AuthRequest, res: Response): Promise<v
       return;
     }
 
+    const isEditingAnswer = Boolean(question.answer);
     question.answer = answer.trim();
     question.answeredBy = req.user._id;
     question.answeredAt = new Date();
+    question.answerEditedAt = isEditingAnswer ? question.answeredAt : undefined;
     await question.save();
 
-    // Notify asker
+    // Notify the asker for new answers and corrections.
     sendNotification({
       recipientId: question.asker.toString(),
       type: 'QUESTION_ANSWERED',
-      title: 'Seller Answered Your Question! 💬',
-      message: `The seller replied to your question on "${listing.title}".`,
+      title: isEditingAnswer ? 'Seller Updated Their Answer' : 'Seller Answered Your Question! 💬',
+      message: isEditingAnswer
+        ? `The seller updated their answer on "${listing.title}".`
+        : `The seller replied to your question on "${listing.title}".`,
       link: `/auctions/${listing._id}`,
       metadata: { listingId: listing._id, questionId: question._id },
     });
@@ -148,12 +173,13 @@ export const answerQuestion = async (req: AuthRequest, res: Response): Promise<v
         answer: question.answer,
         answeredByName: maskStudentName(req.user.name),
         answeredAt: question.answeredAt,
+        answerEditedAt: question.answerEditedAt,
       });
     }
 
     res.json({
       success: true,
-      message: 'Answer posted publicly.',
+      message: isEditingAnswer ? 'Answer updated publicly.' : 'Answer posted publicly.',
       question,
     });
   } catch (error: any) {

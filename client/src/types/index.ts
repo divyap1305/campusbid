@@ -81,6 +81,7 @@ export interface AuctionQuestion {
   answer?: string;
   createdAt: string;
   answeredAt?: string;
+  answerEditedAt?: string;
   askerName: string;
   answeredByName?: string | null;
 }
