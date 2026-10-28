@@ -15,7 +15,8 @@ import {
   ArrowRight,
   Handshake,
   Trash2,
-  Pencil
+  Pencil,
+  RotateCcw
 } from 'lucide-react';
 
 export const MyListingsPage: React.FC = () => {
@@ -33,6 +34,7 @@ export const MyListingsPage: React.FC = () => {
   } | null>(null);
   const [decisionNote, setDecisionNote] = useState<string>('');
   const [decisionLoading, setDecisionLoading] = useState<boolean>(false);
+  const [relistingId, setRelistingId] = useState<string | null>(null);
 
   const fetchMyListings = async () => {
     try {
@@ -86,6 +88,24 @@ export const MyListingsPage: React.FC = () => {
       showToast(err.message || 'Action failed.', 'error');
     } finally {
       setDecisionLoading(false);
+    }
+  };
+
+  const handleRelist = async (listing: Listing) => {
+    setRelistingId(listing.id);
+    try {
+      const response = await api.post<{ success: boolean; message: string; listing: { id?: string; _id?: string } }>(
+        `/auctions/${listing.id}/relist`
+      );
+      if (response.success) {
+        showToast(response.message, 'success');
+        setActiveTab('ACTIVE');
+        await fetchMyListings();
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to relist auction.', 'error');
+    } finally {
+      setRelistingId(null);
     }
   };
 
@@ -256,6 +276,17 @@ export const MyListingsPage: React.FC = () => {
                       Edit Listing
                     </button>
                   )}
+                  {listing.status === 'UNSOLD' && listing.bidCount === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleRelist(listing)}
+                      disabled={relistingId === listing.id}
+                      className="px-3.5 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-50 text-emerald-700 text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      {relistingId === listing.id ? 'Relisting...' : 'Relist Auction'}
+                    </button>
+                  )}
                   {listing.status === 'PENDING_SELLER_DECISION' && (
                     <div className="flex items-center gap-2">
                       <button
@@ -302,9 +333,14 @@ export const MyListingsPage: React.FC = () => {
                     Bids are active; only title and description can be corrected.
                     </p>
                   )}
-                  {!isAuctionOpen && (
+                  {!isAuctionOpen && listing.status !== 'UNSOLD' && (
                     <p className="text-[11px] text-slate-500 text-right max-w-64">
                       {editUnavailableReason}
+                    </p>
+                  )}
+                  {listing.status === 'UNSOLD' && listing.bidCount === 0 && (
+                    <p className="text-[11px] text-slate-500 text-right max-w-64">
+                      Relisting creates a fresh 24-hour auction with no bids.
                     </p>
                   )}
                 </div>

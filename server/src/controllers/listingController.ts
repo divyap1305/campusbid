@@ -58,6 +58,24 @@ export const createListing = async (req: AuthRequest, res: Response): Promise<vo
     const closingTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
 
     // Photos: array of image URLs
+    if (
+      photos !== undefined &&
+      (!Array.isArray(photos) ||
+        photos.length > 10 ||
+        photos.some((photo) => {
+          if (typeof photo !== 'string' || photo.length > 2048) return true;
+          if (photo.startsWith('/uploads/')) return false;
+          try {
+            const parsed = new URL(photo);
+            return parsed.protocol !== 'http:' && parsed.protocol !== 'https:';
+          } catch {
+            return true;
+          }
+        }))
+    ) {
+      res.status(400).json({ success: false, message: 'Photos must contain up to 10 valid image URLs.' });
+      return;
+    }
     const photoUrls: string[] = Array.isArray(photos) ? photos : [];
 
     const listing = await Listing.create({
@@ -103,6 +121,108 @@ export const createListing = async (req: AuthRequest, res: Response): Promise<vo
   } catch (error: any) {
     console.error('[CreateListing Error]', error);
     res.status(500).json({ success: false, message: 'Failed to create auction listing.' });
+  }
+};
+
+export const relistListing = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: 'Authentication required.' });
+      return;
+    }
+
+    const { id } = req.params;
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      res.status(400).json({ success: false, message: 'Invalid listing ID.' });
+      return;
+    }
+
+    const source = await Listing.findById(id);
+    if (!source) {
+      res.status(404).json({ success: false, message: 'Listing not found.' });
+      return;
+    }
+    if (source.seller.toString() !== req.user._id.toString()) {
+      res.status(403).json({ success: false, message: 'You do not have permission to relist this auction.' });
+      return;
+    }
+
+    if (
+      source.status !== 'UNSOLD' ||
+      source.bidCount !== 0 ||
+      source.closingTime.getTime() > Date.now() ||
+      await Bid.exists({ listing: source._id })
+    ) {
+      res.status(409).json({
+        success: false,
+        message: 'Only ended auctions with no bids can be relisted.',
+      });
+      return;
+    }
+
+    const closingTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const relisted = await Listing.create({
+      title: source.title,
+      category: source.category,
+      description: source.description,
+      condition: source.condition,
+      photos: source.photos,
+      startingPricePaise: source.startingPricePaise,
+      minIncrementPaise: source.minIncrementPaise,
+      currentPricePaise: source.startingPricePaise,
+      seller: source.seller,
+      status: 'ACTIVE',
+      closingTime,
+      originalClosingTime: closingTime,
+      bidCount: 0,
+      extensionCount: 0,
+      relistedFrom: source._id,
+    });
+
+    try {
+      await AuditLog.create({
+        event: 'LISTING_RELISTED',
+        entityType: 'LISTING',
+        entityId: source._id,
+        actorId: req.user._id,
+        details: { relistedListingId: relisted._id },
+        ipAddress: req.ip,
+      });
+    } catch (auditError) {
+      console.error('[Listing Audit Log Error] Listing relisted but audit record failed:', auditError);
+    }
+
+    if (io) {
+      io.emit('new_listing_published', {
+        id: relisted._id,
+        title: relisted.title,
+        category: relisted.category,
+        currentPricePaise: relisted.currentPricePaise,
+        closingTime: relisted.closingTime,
+      });
+    }
+
+    setImmediate(() => {
+      checkSavedSearchesForListing(relisted).catch((err) =>
+        console.error('[SavedSearch Check Error]', err)
+      );
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Auction relisted successfully for 24 hours.',
+      listing: relisted,
+    });
+  } catch (error: any) {
+    if (error?.code === 11000) {
+      res.status(409).json({
+        success: false,
+        message: 'This auction has already been relisted.',
+      });
+      return;
+    }
+    console.error('[RelistListing Error]', error);
+    res.status(500).json({ success: false, message: 'Failed to relist auction.' });
   }
 };
 

@@ -40,6 +40,7 @@ export const CreateListingPage: React.FC = () => {
   const [closingDateTime, setClosingDateTime] = useState<string>('');
   const [photoUrl, setPhotoUrl] = useState<string>('');
   const [photos, setPhotos] = useState<string[]>([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [editLoading, setEditLoading] = useState<boolean>(Boolean(editId));
   const [existingListing, setExistingListing] = useState<Listing | null>(null);
@@ -95,6 +96,36 @@ export const CreateListingPage: React.FC = () => {
 
   const handleRemovePhoto = (index: number) => {
     setPhotos(photos.filter((_, i) => i !== index));
+  };
+
+  const handleUploadPhotos = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const selectedFiles = Array.from(files);
+    if (photos.length + selectedFiles.length > 10) {
+      showToast('A listing can have up to 10 photos.', 'warning');
+      return;
+    }
+
+    setUploadingPhotos(true);
+    const uploadedUrls: string[] = [];
+    try {
+      for (const file of selectedFiles) {
+        const response = await api.upload<{ success: boolean; url: string }>('/auctions/photos', file);
+        if (!response.success || !response.url) {
+          throw new Error('Image upload did not return a photo URL.');
+        }
+        uploadedUrls.push(response.url);
+      }
+      setPhotos((current) => [...current, ...uploadedUrls]);
+      showToast(`${uploadedUrls.length} photo${uploadedUrls.length === 1 ? '' : 's'} uploaded.`, 'success');
+    } catch (err: any) {
+      if (uploadedUrls.length > 0) {
+        setPhotos((current) => [...current, ...uploadedUrls]);
+      }
+      showToast(err.message || 'Failed to upload photos.', 'error');
+    } finally {
+      setUploadingPhotos(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -319,6 +350,23 @@ export const CreateListingPage: React.FC = () => {
                 Add Photo
               </button>
             </div>
+
+            <label className={`flex w-fit items-center gap-2 px-4 py-2 rounded-xl border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-bold cursor-pointer hover:bg-indigo-100 ${(isEditing && !canEditAuctionTerms) || uploadingPhotos || photos.length >= 10 ? 'opacity-50 cursor-not-allowed' : ''}`}>
+              <Upload className="w-4 h-4" />
+              {uploadingPhotos ? 'Uploading photos...' : 'Upload photos'}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                disabled={(isEditing && !canEditAuctionTerms) || uploadingPhotos || photos.length >= 10}
+                onChange={(event) => {
+                  void handleUploadPhotos(event.target.files);
+                  event.target.value = '';
+                }}
+                className="sr-only"
+              />
+            </label>
+            <p className="text-[11px] text-slate-400">JPEG, PNG, or WebP. Up to 5 MB each and 10 photos per listing.</p>
 
             {/* Quick Presets for Demo */}
             <div className="pt-2">

@@ -15,7 +15,7 @@ export const removeAuthToken = (): void => {
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getAuthToken();
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers as Record<string, string>),
   };
 
@@ -41,6 +41,11 @@ export const api = {
   get: <T>(endpoint: string) => request<T>(endpoint, { method: 'GET' }),
   post: <T>(endpoint: string, body?: any) =>
     request<T>(endpoint, { method: 'POST', body: body ? JSON.stringify(body) : undefined }),
+  upload: <T>(endpoint: string, file: File) => {
+    const formData = new FormData();
+    formData.append('photo', file);
+    return request<T>(endpoint, { method: 'POST', body: formData });
+  },
   put: <T>(endpoint: string, body?: any) =>
     request<T>(endpoint, { method: 'PUT', body: body ? JSON.stringify(body) : undefined }),
   del: <T>(endpoint: string) => request<T>(endpoint, { method: 'DELETE' }),

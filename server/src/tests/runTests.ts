@@ -1,5 +1,7 @@
 import http from 'http';
 import { AddressInfo } from 'net';
+import { unlink } from 'fs/promises';
+import path from 'path';
 import mongoose from 'mongoose';
 import { createApp } from '../app.js';
 import { ENV } from '../config/env.js';
@@ -91,6 +93,7 @@ const runTests = async () => {
       };
       listings?: Array<{ _id?: string; id?: string }>;
       consentRequest?: { consentToken: string };
+      url?: string;
     }
     const apiRequest = async (
       endpoint: string,
@@ -139,6 +142,54 @@ const runTests = async () => {
       !!buyerLogin.body.token &&
       sellerLogin.body.user?.id !== buyerLogin.body.user?.id,
       'Register and log in as two distinct users through the API'
+    );
+
+    const validPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lJ8AAAAASUVORK5CYII=',
+      'base64'
+    );
+    const photoForm = new FormData();
+    photoForm.append('photo', new Blob([validPng], { type: 'image/png' }), 'campus-item.png');
+    const photoUploadResponse = await fetch(`${apiBase}/auctions/photos`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sellerLogin.body.token}` },
+      body: photoForm,
+    });
+    const uploadedPhoto = await photoUploadResponse.json() as ApiResult;
+    const uploadedPhotoPath = uploadedPhoto.url;
+    const uploadedPhotoResponse = uploadedPhotoPath
+      ? await fetch(`http://127.0.0.1:${apiAddress.port}${uploadedPhotoPath}`)
+      : null;
+    const invalidPhotoForm = new FormData();
+    invalidPhotoForm.append('photo', new Blob(['not an image'], { type: 'image/png' }), 'invalid.png');
+    const invalidPhotoResponse = await fetch(`${apiBase}/auctions/photos`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${sellerLogin.body.token}` },
+      body: invalidPhotoForm,
+    });
+    const unauthenticatedPhotoResponse = await fetch(`${apiBase}/auctions/photos`, {
+      method: 'POST',
+      body: photoForm,
+    });
+    const tooManyPhotos = await apiRequest('/auctions', 'POST', {
+      title: 'Too many photo test',
+      category: 'CYCLES',
+      description: 'Should reject more than ten photos.',
+      condition: 'GOOD',
+      startingPrice: 100,
+      photos: Array(11).fill('https://example.com/item.png'),
+    }, sellerLogin.body.token);
+    if (uploadedPhotoPath) {
+      await unlink(path.resolve('uploads', path.basename(uploadedPhotoPath)));
+    }
+    assert(
+      photoUploadResponse.status === 201 &&
+      uploadedPhoto.url?.startsWith('/uploads/') === true &&
+      uploadedPhotoResponse?.status === 200 &&
+      invalidPhotoResponse.status === 400 &&
+      unauthenticatedPhotoResponse.status === 401 &&
+      tooManyPhotos.status === 400,
+      'Photo uploads require authentication, validate image data, serve saved images, and enforce listing photo limits'
     );
 
     const invalidIncrementListing = await apiRequest('/auctions', 'POST', {
@@ -574,7 +625,7 @@ const runTests = async () => {
       startingPricePaise: rupeesToPaise(100),
       minIncrementPaise: rupeesToPaise(10),
       currentPricePaise: rupeesToPaise(100),
-      seller: seller._id,
+      seller: new mongoose.Types.ObjectId(sellerLogin.body.user?.id),
       status: 'ACTIVE',
       closingTime: new Date(Date.now() - 1000),
       originalClosingTime: new Date(Date.now() - 1000),
@@ -585,6 +636,66 @@ const runTests = async () => {
     await closeAuction(unsoldTestListing._id.toString());
     const afterUnsoldClose = await Listing.findById(unsoldTestListing._id);
     assert(afterUnsoldClose?.status === 'UNSOLD', 'Auction with 0 bids closes as UNSOLD');
+
+    const unauthorizedRelist = await apiRequest(
+      `/auctions/${unsoldTestListing._id}/relist`,
+      'POST',
+      {},
+      buyerLogin.body.token
+    );
+    const relistedResponse = await apiRequest(
+      `/auctions/${unsoldTestListing._id}/relist`,
+      'POST',
+      {},
+      sellerLogin.body.token
+    );
+    const relistedId = relistedResponse.body.listing?._id;
+    const relistedListing = relistedId ? await Listing.findById(relistedId) : null;
+    const relistAudit = await AuditLog.findOne({
+      entityId: unsoldTestListing._id,
+      event: 'LISTING_RELISTED',
+    });
+    const duplicateRelist = await apiRequest(
+      `/auctions/${unsoldTestListing._id}/relist`,
+      'POST',
+      {},
+      sellerLogin.body.token
+    );
+    assert(
+      unauthorizedRelist.status === 403 &&
+      relistedResponse.status === 201 &&
+      !!relistedListing &&
+      relistedListing._id.toString() !== unsoldTestListing._id.toString() &&
+      relistedListing.status === 'ACTIVE' &&
+      relistedListing.bidCount === 0 &&
+      relistedListing.currentPricePaise === unsoldTestListing.startingPricePaise &&
+      relistedListing.relistedFrom?.toString() === unsoldTestListing._id.toString() &&
+      afterUnsoldClose?.status === 'UNSOLD' &&
+      !!relistAudit &&
+      duplicateRelist.status === 409,
+      'Seller can relist an ended zero-bid auction once while preserving the original listing'
+    );
+
+    const activeRelist = await apiRequest(
+      `/auctions/${createdListingId}/relist`,
+      'POST',
+      {},
+      sellerLogin.body.token
+    );
+    await Listing.updateOne(
+      { _id: createdListingId },
+      { $set: { status: 'UNSOLD', closingTime: new Date(Date.now() - 1000) } }
+    );
+    const bidRelist = await apiRequest(
+      `/auctions/${createdListingId}/relist`,
+      'POST',
+      {},
+      sellerLogin.body.token
+    );
+    assert(
+      activeRelist.status === 409 && bidRelist.status === 409,
+      'Relisting is rejected for active auctions and auctions that had bids'
+    );
 
     // B: Has bids -> PENDING_SELLER_DECISION
     await closeAuction(autoListing._id.toString());

@@ -46,6 +46,7 @@ export interface IListing extends Document {
   winningPricePaise?: number;
   extensionCount: number;
   sellerDecisionNote?: string;
+  relistedFrom?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +98,7 @@ const ListingSchema = new Schema<IListing>(
     winningPricePaise: { type: Number },
     extensionCount: { type: Number, default: 0 },
     sellerDecisionNote: { type: String },
+    relistedFrom: { type: Schema.Types.ObjectId, ref: 'Listing' },
   },
   { timestamps: true }
 );
@@ -104,6 +106,7 @@ const ListingSchema = new Schema<IListing>(
 // Compound index for active auctions closing soon
 ListingSchema.index({ status: 1, closingTime: 1 });
 ListingSchema.index({ status: 1, currentPricePaise: 1 });
+ListingSchema.index({ relistedFrom: 1 }, { unique: true, sparse: true });
 // Full-text search index for search discovery
 ListingSchema.index({ title: 'text', description: 'text' });
 
