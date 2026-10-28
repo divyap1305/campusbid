@@ -15,13 +15,13 @@ export const handlePlaceBid = async (req: AuthRequest, res: Response): Promise<v
     const { id: listingId } = req.params;
     const { amountRupees, amountPaise } = req.body;
 
-    const bidPaise = amountPaise
+    const bidPaise = amountPaise !== undefined
       ? Number(amountPaise)
-      : amountRupees
+      : amountRupees !== undefined
       ? rupeesToPaise(Number(amountRupees))
       : 0;
 
-    if (!bidPaise || bidPaise <= 0) {
+    if (!Number.isSafeInteger(bidPaise) || bidPaise <= 0) {
       res.status(400).json({ success: false, message: 'A valid positive bid amount is required.' });
       return;
     }
@@ -52,13 +52,13 @@ export const configureAutoBid = async (req: AuthRequest, res: Response): Promise
     const { id: listingId } = req.params;
     const { maxRupees, maxPaise } = req.body;
 
-    const ceilingPaise = maxPaise
+    const ceilingPaise = maxPaise !== undefined
       ? Number(maxPaise)
-      : maxRupees
+      : maxRupees !== undefined
       ? rupeesToPaise(Number(maxRupees))
       : 0;
 
-    if (!ceilingPaise || ceilingPaise <= 0) {
+    if (!Number.isSafeInteger(ceilingPaise) || ceilingPaise <= 0) {
       res.status(400).json({ success: false, message: 'A valid maximum authorized amount is required.' });
       return;
     }

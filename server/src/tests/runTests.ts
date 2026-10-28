@@ -1,4 +1,8 @@
+import http from 'http';
+import { AddressInfo } from 'net';
 import mongoose from 'mongoose';
+import { createApp } from '../app.js';
+import { ENV } from '../config/env.js';
 import { User } from '../models/User.js';
 import { Listing } from '../models/Listing.js';
 import { Bid } from '../models/Bid.js';
@@ -41,12 +45,12 @@ const runTests = async () => {
   };
 
   try {
-    await connectDB();
+    await connectDB('campusbid_test');
 
-    // 0. Clean test db sandbox
+    // All cleanup is confined to the dedicated campusbid_test database.
     await Promise.all([
-      User.deleteMany({ email: /test.*@campus\.edu/ }),
-      Listing.deleteMany({ title: /\[TEST\]/ }),
+      User.deleteMany({}),
+      Listing.deleteMany({}),
       Bid.deleteMany({}),
       AutoBidSetting.deleteMany({}),
       SavedSearch.deleteMany({}),
@@ -55,6 +59,142 @@ const runTests = async () => {
       AIActionConsent.deleteMany({}),
     ]);
 
+    // Verify registration, login, listing API access, and public seller-data sanitization.
+    const apiServer = http.createServer(createApp());
+    await new Promise<void>((resolve, reject) => {
+      apiServer.once('error', reject);
+      apiServer.listen(0, '127.0.0.1', resolve);
+    });
+    const apiAddress = apiServer.address() as AddressInfo;
+    const apiBase = `http://127.0.0.1:${apiAddress.port}/api`;
+    interface ApiResult {
+      success?: boolean;
+      token?: string;
+      user?: { id: string; email?: string };
+      listing?: {
+        _id?: string;
+        id?: string;
+        currentPricePaise?: number;
+        seller?: { email?: string; phoneNumber?: string };
+      };
+      listings?: Array<{ _id?: string; id?: string }>;
+      consentRequest?: { consentToken: string };
+    }
+    const apiRequest = async (
+      endpoint: string,
+      method = 'GET',
+      payload?: Record<string, unknown>,
+      token?: string
+    ) => {
+      const headers: Record<string, string> = {};
+      if (payload) headers['Content-Type'] = 'application/json';
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch(`${apiBase}${endpoint}`, {
+        method,
+        headers,
+        body: payload ? JSON.stringify(payload) : undefined,
+      });
+      return { status: response.status, body: await response.json() as ApiResult };
+    };
+
+    const testDomain = ENV.ALLOWED_EMAIL_DOMAINS[0];
+    const uniqueSuffix = `${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+    const sellerEmail = `test_seller_${uniqueSuffix}@${testDomain}`;
+    const buyerEmail = `test_buyer_${uniqueSuffix}@${testDomain}`;
+    const password = 'DemoPassword123!';
+    const sellerRegistration = await apiRequest('/auth/register', 'POST', {
+      name: 'API Test Seller',
+      email: sellerEmail,
+      password,
+      studentId: `SELLER_${uniqueSuffix}`,
+      department: 'Engineering',
+      phoneNumber: '1111111111',
+    });
+    const buyerRegistration = await apiRequest('/auth/register', 'POST', {
+      name: 'API Test Buyer',
+      email: buyerEmail,
+      password,
+      studentId: `BUYER_${uniqueSuffix}`,
+      department: 'Science',
+      phoneNumber: '2222222222',
+    });
+    const sellerLogin = await apiRequest('/auth/login', 'POST', { email: sellerEmail, password });
+    const buyerLogin = await apiRequest('/auth/login', 'POST', { email: buyerEmail, password });
+    assert(
+      sellerRegistration.status === 201 &&
+      buyerRegistration.status === 201 &&
+      !!sellerLogin.body.token &&
+      !!buyerLogin.body.token &&
+      sellerLogin.body.user?.id !== buyerLogin.body.user?.id,
+      'Register and log in as two distinct users through the API'
+    );
+
+    const invalidIncrementListing = await apiRequest('/auctions', 'POST', {
+      title: 'Invalid increment test',
+      category: 'CYCLES',
+      description: 'Must not create a listing with a negative minimum increment.',
+      condition: 'GOOD',
+      startingPrice: 1000,
+      minIncrement: -1,
+      durationHours: 2,
+    }, sellerLogin.body.token);
+    const createdListing = await apiRequest('/auctions', 'POST', {
+      title: '[TEST] API Demo Cycle',
+      category: 'CYCLES',
+      description: 'API workflow listing for end-to-end readiness tests.',
+      condition: 'GOOD',
+      startingPrice: 1000,
+      minIncrement: 50,
+      durationHours: 2,
+      photos: [],
+    }, sellerLogin.body.token);
+    const createdListingId = createdListing.body.listing?._id;
+    const publicListing = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}`, 'GET', undefined, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const sellerListings = await apiRequest('/auctions/my/listings', 'GET', undefined, sellerLogin.body.token);
+    const sellerListing = sellerListings.body.listings?.find((item) => item.id === createdListingId);
+    const detailFromSellerListing = sellerListing?.id
+      ? await apiRequest(`/auctions/${sellerListing.id}`, 'GET', undefined, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const invalidListingId = await apiRequest('/auctions/not-a-mongo-id');
+    const missingListingId = new mongoose.Types.ObjectId().toString();
+    const missingListing = await apiRequest(`/auctions/${missingListingId}`);
+    assert(
+      invalidIncrementListing.status === 400 &&
+      createdListing.status === 201 &&
+      publicListing.status === 200 &&
+      sellerListings.status === 200 &&
+      sellerListing?.id === createdListingId &&
+      detailFromSellerListing.status === 200 &&
+      detailFromSellerListing.body.listing?.id === createdListingId &&
+      invalidListingId.status === 400 &&
+      missingListing.status === 404 &&
+      publicListing.body.listing?.currentPricePaise === rupeesToPaise(1000) &&
+      !publicListing.body.listing?.seller?.email &&
+      !publicListing.body.listing?.seller?.phoneNumber,
+      'Seller listing exposes a usable ID, detail lookup succeeds, and invalid or missing IDs are handled'
+    );
+
+    const sellerBid = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/bid`, 'POST', { amountRupees: 1000 }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const validBid = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/bid`, 'POST', { amountRupees: 1000 }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const invalidIncrementBid = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}/bid`, 'POST', { amountRupees: 1020 }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const updatedPublicListing = createdListingId
+      ? await apiRequest(`/auctions/${createdListingId}`, 'GET', undefined, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    assert(
+      sellerBid.status === 400 &&
+      validBid.status === 200 &&
+      invalidIncrementBid.status === 400 &&
+      updatedPublicListing.body.listing?.currentPricePaise === rupeesToPaise(1000),
+      'API rejects seller and below-increment bids and publishes the accepted highest bid'
+    );
     // TEST 1: User Registration & Campus Eligibility
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash('Secret123', salt);
@@ -109,6 +249,9 @@ const runTests = async () => {
     });
 
     assert(listing.startingPricePaise === 100000, 'Listing Created with Integer Paise Precision (₹1,000 = 100000 paise)');
+
+    const invalidBidResult = await placeBid(listing._id.toString(), buyer1._id.toString(), Number.NaN);
+    assert(!invalidBidResult.success, 'Reject invalid non-integer bid amounts');
 
     // TEST 3: Seller Self-Bidding Rejection
     const selfBidResult = await placeBid(listing._id.toString(), seller._id.toString(), rupeesToPaise(1100));
@@ -171,7 +314,13 @@ const runTests = async () => {
     });
 
     const bidAt25s = await placeBid(listing25._id.toString(), buyer2._id.toString(), rupeesToPaise(500));
-    assert(bidAt25s.wasExtended === true, 'Anti-Sniping: Bid at 25s (<=30s) Automatically Extends Clock by 60s');
+    assert(
+      bidAt25s.wasExtended === true &&
+      !!bidAt25s.bid &&
+      !!bidAt25s.listing &&
+      bidAt25s.listing.closingTime.getTime() - bidAt25s.bid.serverTimestamp.getTime() === 60000,
+      'Anti-Sniping: Bid at 25s (<=30s) Extends Clock to 60s After the Accepted Bid'
+    );
 
     // TEST 8: Rejection of Bids After Closure
     const closedListing = await Listing.create({
@@ -247,6 +396,35 @@ const runTests = async () => {
       'Proxy Bidding: Higher ceiling (Buyer 1 ₹3,000) maintains lead over Buyer 2 (₹2,500) at minimum increment ₹2,600'
     );
 
+    const concurrentListing = await Listing.create({
+      title: '[TEST] Concurrent Bid Validation',
+      category: 'ELECTRONICS',
+      description: 'Concurrency test listing.',
+      condition: 'GOOD',
+      photos: [],
+      startingPricePaise: rupeesToPaise(1000),
+      minIncrementPaise: rupeesToPaise(50),
+      currentPricePaise: rupeesToPaise(1000),
+      seller: seller._id,
+      status: 'ACTIVE',
+      closingTime: new Date(Date.now() + 3600000),
+      originalClosingTime: new Date(Date.now() + 3600000),
+      bidCount: 0,
+      extensionCount: 0,
+    });
+    const concurrentResults = await Promise.all([
+      placeBid(concurrentListing._id.toString(), buyer1._id.toString(), rupeesToPaise(1000)),
+      placeBid(concurrentListing._id.toString(), buyer2._id.toString(), rupeesToPaise(1000)),
+    ]);
+    const concurrentListingAfterBids = await Listing.findById(concurrentListing._id);
+    const concurrentBidCount = await Bid.countDocuments({ listing: concurrentListing._id });
+    assert(
+      concurrentResults.filter((result) => result.success).length === 1 &&
+      concurrentListingAfterBids?.bidCount === 1 &&
+      concurrentBidCount === 1,
+      'Concurrent bids at the same price accept exactly one bid'
+    );
+
     // TEST 10: Auction Closure Handling (With and Without Bids)
     // A: 0 bids -> UNSOLD
     const unsoldTestListing = await Listing.create({
@@ -291,6 +469,16 @@ const runTests = async () => {
       'Item Reserved for Handover with Secure 6-Digit OTP Verification Code'
     );
 
+    const missingOtpResult = await confirmHandover(autoListing._id.toString(), buyer1._id.toString());
+    const wrongOtpResult = await confirmHandover(autoListing._id.toString(), buyer1._id.toString(), '000000');
+    const handoverBeforeValidOtp = await HandoverRecord.findOne({ listing: autoListing._id });
+    assert(
+      !missingOtpResult.success &&
+      !wrongOtpResult.success &&
+      handoverBeforeValidOtp?.status === 'PENDING_MEETING',
+      'Handover confirmation rejects missing and invalid OTPs'
+    );
+
     // TEST 12: Handover Confirmation with OTP
     const confirmResult = await confirmHandover(
       autoListing._id.toString(),
@@ -300,7 +488,13 @@ const runTests = async () => {
     assert(confirmResult.success, 'Physical Campus Handover Confirmed with Valid OTP');
 
     const completedListing = await Listing.findById(autoListing._id);
-    assert(completedListing?.status === 'COMPLETED', 'Listing Transitions to COMPLETED after Handover');
+    const completedHandover = await HandoverRecord.findOne({ listing: autoListing._id });
+    assert(
+      completedListing?.status === 'COMPLETED' &&
+      completedHandover?.status === 'CONFIRMED' &&
+      !!completedHandover.confirmedAt,
+      'Valid OTP completes the matching listing and handover record'
+    );
 
     // TEST 13: Failed Pickup Outcome Handling
     const failListing = await Listing.create({
@@ -385,6 +579,31 @@ const runTests = async () => {
       !!aiAutoBid.consentRequest.consentToken,
       'AI Assistant Enforces Explicit Student Consent Protocol Before Activating Auto-Bidding'
     );
+
+    const aiConsentRequest = await apiRequest('/ai/query', 'POST', {
+      prompt: 'Set up auto bid on cycle up to 2000',
+    }, buyerLogin.body.token);
+    const consentToken = aiConsentRequest.body.consentRequest?.consentToken;
+    const unauthorizedConsentExecution = consentToken
+      ? await apiRequest('/ai/consent/execute', 'POST', { consentToken }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const consentExecution = consentToken
+      ? await apiRequest('/ai/consent/execute', 'POST', { consentToken }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const executedConsent = consentToken
+      ? await AIActionConsent.findOne({ consentToken })
+      : null;
+    assert(
+      aiConsentRequest.body.success === true &&
+      unauthorizedConsentExecution.status === 404 &&
+      consentExecution.body.success === true &&
+      executedConsent?.status === 'EXECUTED',
+      'AI consent execution is explicit, succeeds for its owner, and rejects another user'
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      apiServer.close((error) => error ? reject(error) : resolve());
+    });
 
     console.log('\n====================================================');
     console.log(`📊 TEST SUITE SUMMARY: ${passed} PASSED | ${failed} FAILED`);

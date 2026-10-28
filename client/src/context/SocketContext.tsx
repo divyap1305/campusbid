@@ -14,19 +14,17 @@ const SocketContext = createContext<SocketContextType | undefined>(undefined);
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
-  const { user } = useAuth();
+  const { token } = useAuth();
 
   useEffect(() => {
     const s = io(window.location.origin, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
+      auth: token ? { token } : {},
     });
 
     s.on('connect', () => {
       setIsConnected(true);
-      if (user) {
-        s.emit('join_user', user.id);
-      }
     });
 
     s.on('disconnect', () => {
@@ -38,13 +36,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return () => {
       s.disconnect();
     };
-  }, []);
-
-  useEffect(() => {
-    if (socket && user) {
-      socket.emit('join_user', user.id);
-    }
-  }, [socket, user]);
+  }, [token]);
 
   const joinAuction = (auctionId: string) => {
     if (socket) {

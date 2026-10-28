@@ -68,7 +68,7 @@ const ListingSchema = new Schema<IListing>(
     },
     photos: [{ type: String }],
     startingPricePaise: { type: Number, required: true, min: 100 }, // Min ₹1.00
-    minIncrementPaise: { type: Number, required: true, default: 2000 }, // Default ₹20.00
+    minIncrementPaise: { type: Number, required: true, min: 1, default: 2000 }, // Default ₹20.00
     currentPricePaise: { type: Number, required: true },
     seller: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     status: {

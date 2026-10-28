@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import mongoose from 'mongoose';
 import { ENV } from './config/env.js';
+import { isAllowedClientOrigin } from './config/origin.js';
 
 // Route imports
 import authRoutes from './routes/authRoutes.js';
@@ -19,7 +20,13 @@ export const createApp = (): Application => {
 
   // Middleware
   app.use(cors({
-    origin: [ENV.CLIENT_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'],
+    origin: (origin, callback) => {
+      if (isAllowedClientOrigin(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Origin is not allowed by CORS.'));
+      }
+    },
     credentials: true,
   }));
 

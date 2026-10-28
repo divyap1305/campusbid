@@ -31,6 +31,10 @@ export const placeBid = async (
   amountPaise: number,
   options: { isAutoBid?: boolean; maxAuthorizedPaise?: number; ipAddress?: string } = {}
 ): Promise<PlaceBidResult> => {
+  if (!Number.isSafeInteger(amountPaise) || amountPaise <= 0) {
+    return { success: false, message: 'Bid amount must be a positive whole number of paise.' };
+  }
+
   const now = new Date();
 
   // 1. Fetch current listing state

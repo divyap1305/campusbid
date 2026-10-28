@@ -93,7 +93,9 @@ export const AuctionCard: React.FC<AuctionCardProps> = ({ listing }) => {
             </div>
             <span className="font-medium text-slate-700 truncate">{listing.seller.name}</span>
             {listing.seller.isCampusVerified && (
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" title="Verified Campus Student" />
+              <span className="inline-flex shrink-0" title="Verified Campus Student" role="img" aria-label="Verified Campus Student">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" aria-hidden="true" />
+              </span>
             )}
           </div>
         )}

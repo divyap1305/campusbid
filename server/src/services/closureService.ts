@@ -221,8 +221,14 @@ export const confirmHandover = async (
     return { success: false, message: 'Only buyer or seller can confirm handover.' };
   }
 
-  // If OTP provided, verify it
-  if (verificationCodeProvided && verificationCodeProvided.trim() !== handover.verificationCode) {
+  const providedCode = typeof verificationCodeProvided === 'string'
+    ? verificationCodeProvided.trim()
+    : '';
+  if (!providedCode || !/^\d{6}$/.test(providedCode)) {
+    return { success: false, message: 'A valid 6-digit campus handover verification code is required.' };
+  }
+
+  if (providedCode !== handover.verificationCode) {
     return { success: false, message: 'Invalid 6-digit campus handover verification code.' };
   }
 

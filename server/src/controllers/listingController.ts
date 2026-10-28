@@ -31,14 +31,27 @@ export const createListing = async (req: AuthRequest, res: Response): Promise<vo
     }
 
     const startingPricePaise = rupeesToPaise(Number(startingPrice));
-    const minIncrementPaise = minIncrement ? rupeesToPaise(Number(minIncrement)) : 2000; // default ₹20
+    const minIncrementPaise = minIncrement === undefined || minIncrement === null || minIncrement === ''
+      ? 2000
+      : rupeesToPaise(Number(minIncrement)); // default ₹20
 
-    if (startingPricePaise <= 0) {
+    if (!Number.isSafeInteger(startingPricePaise) || startingPricePaise <= 0) {
       res.status(400).json({ success: false, message: 'Starting price must be greater than ₹0.' });
       return;
     }
 
-    const hours = durationHours ? Number(durationHours) : 24; // default 24 hours
+    if (!Number.isSafeInteger(minIncrementPaise) || minIncrementPaise <= 0) {
+      res.status(400).json({ success: false, message: 'Minimum bid increment must be a positive amount.' });
+      return;
+    }
+
+    const hours = durationHours === undefined || durationHours === null || durationHours === ''
+      ? 24
+      : Number(durationHours); // default 24 hours
+    if (!Number.isFinite(hours) || hours <= 0) {
+      res.status(400).json({ success: false, message: 'Auction duration must be greater than zero.' });
+      return;
+    }
     const now = new Date();
     const closingTime = new Date(now.getTime() + hours * 60 * 60 * 1000);
 
@@ -125,11 +138,20 @@ export const updateListing = async (req: AuthRequest, res: Response): Promise<vo
     } else {
       if (startingPrice !== undefined) {
         const newStartPaise = rupeesToPaise(Number(startingPrice));
+        if (!Number.isSafeInteger(newStartPaise) || newStartPaise <= 0) {
+          res.status(400).json({ success: false, message: 'Starting price must be a positive amount.' });
+          return;
+        }
         listing.startingPricePaise = newStartPaise;
         listing.currentPricePaise = newStartPaise;
       }
       if (minIncrement !== undefined) {
-        listing.minIncrementPaise = rupeesToPaise(Number(minIncrement));
+        const newIncrementPaise = rupeesToPaise(Number(minIncrement));
+        if (!Number.isSafeInteger(newIncrementPaise) || newIncrementPaise <= 0) {
+          res.status(400).json({ success: false, message: 'Minimum bid increment must be a positive amount.' });
+          return;
+        }
+        listing.minIncrementPaise = newIncrementPaise;
       }
     }
 
@@ -324,6 +346,11 @@ export const getListings = async (req: Request, res: Response): Promise<void> =>
 export const getListingById = async (req: Request, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      res.status(400).json({ success: false, message: 'Invalid listing ID.' });
+      return;
+    }
+
     const listing = await Listing.findById(id)
       .populate('seller', 'name email department phoneNumber avatarUrl isCampusVerified')
       .populate('leadingBidder', 'name');
@@ -401,7 +428,10 @@ export const getMyListings = async (req: AuthRequest, res: Response): Promise<vo
 
     res.json({
       success: true,
-      listings,
+      listings: listings.map((listing) => ({
+        ...listing.toObject(),
+        id: listing._id.toString(),
+      })),
     });
   } catch (error: any) {
     console.error('[GetMyListings Error]', error);

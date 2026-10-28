@@ -62,7 +62,20 @@ export const AuctionDetailPage: React.FC = () => {
 
   // 1. Initial Data Fetching
   const fetchListingDetails = async () => {
-    if (!id) return;
+    if (!id) {
+      setError('Invalid auction listing ID.');
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setListing(null);
+    setBids([]);
+    setQuestions([]);
+    setMyAutoBid(null);
+
+    let loadedListing: Listing;
     try {
       const res = await api.get<{
         success: boolean;
@@ -70,38 +83,47 @@ export const AuctionDetailPage: React.FC = () => {
         bids: Bid[];
       }>(`/auctions/${id}`);
 
-      if (res.success && res.listing) {
-        setListing(res.listing);
-        setBids(res.bids);
-
-        // Pre-fill next minimum required bid
-        const minReqPaise = res.listing.bidCount === 0
-          ? res.listing.startingPricePaise
-          : res.listing.currentPricePaise + res.listing.minIncrementPaise;
-        setManualBidRupees(Math.round(minReqPaise / 100).toString());
+      if (!res.success || !res.listing) {
+        throw new Error('Listing not found.');
       }
 
-      // Fetch questions
+      loadedListing = res.listing;
+      setListing(loadedListing);
+      setBids(res.bids);
+
+      const minReqPaise = loadedListing.bidCount === 0
+        ? loadedListing.startingPricePaise
+        : loadedListing.currentPricePaise + loadedListing.minIncrementPaise;
+      setManualBidRupees(Math.round(minReqPaise / 100).toString());
+    } catch (err: any) {
+      setError(err.message || 'Failed to load auction listing.');
+      return;
+    } finally {
+      setLoading(false);
+    }
+
+    try {
       const qRes = await api.get<{ success: boolean; questions: AuctionQuestion[] }>(
         `/auctions/${id}/questions`
       );
       if (qRes.success) {
         setQuestions(qRes.questions);
       }
+    } catch (err) {
+      console.error('[Auction Detail] Failed to load auction questions:', err);
+    }
 
-      // Fetch active auto-bid if user signed in
-      if (user) {
+    if (user) {
+      try {
         const autoRes = await api.get<{ success: boolean; autoBid: any }>(
           `/auctions/${id}/auto-bid`
         );
         if (autoRes.success && autoRes.autoBid) {
           setMyAutoBid(autoRes.autoBid);
         }
+      } catch (err) {
+        console.error('[Auction Detail] Failed to load automatic bid settings:', err);
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to load auction listing.');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -213,10 +235,13 @@ export const AuctionDetailPage: React.FC = () => {
   }
 
   if (error || !listing) {
+    const isNotFound = /not found|invalid listing id/i.test(error || '');
     return (
       <div className="max-w-md mx-auto my-16 p-8 bg-white rounded-3xl border border-slate-200 text-center">
         <AlertTriangle className="w-12 h-12 text-rose-500 mx-auto mb-3" />
-        <h2 className="text-lg font-bold text-slate-800">Auction Listing Not Found</h2>
+        <h2 className="text-lg font-bold text-slate-800">
+          {isNotFound ? 'Auction Listing Not Found' : 'Unable to Load Auction Listing'}
+        </h2>
         <p className="text-xs text-slate-500 mt-1">{error || 'This listing might have been removed.'}</p>
         <Link
           to="/auctions"
@@ -481,7 +506,9 @@ export const AuctionDetailPage: React.FC = () => {
                     <div className="flex items-center gap-1.5 font-bold text-slate-900 text-sm">
                       <span>{listing.seller.name}</span>
                       {listing.seller.isCampusVerified && (
-                        <ShieldCheck className="w-4 h-4 text-emerald-500" title="Verified Campus Student" />
+                        <span className="inline-flex" title="Verified Campus Student" role="img" aria-label="Verified Campus Student">
+                          <ShieldCheck className="w-4 h-4 text-emerald-500" aria-hidden="true" />
+                        </span>
                       )}
                     </div>
                     <span className="text-xs text-slate-500">{listing.seller.department || 'Enrolled Student'}</span>
