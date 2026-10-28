@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { api } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.js';
 import { useNotification } from '../context/NotificationContext.js';
-import { ListingCategory, ListingCondition } from '../types/index.js';
+import { Listing, ListingCategory, ListingCondition } from '../types/index.js';
 import { 
   Gavel, 
   Upload, 
@@ -19,7 +19,13 @@ import {
   Laptop
 } from 'lucide-react';
 
+const toDateTimeLocal = (value: string | Date): string => {
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
+
 export const CreateListingPage: React.FC = () => {
+  const { id: editId } = useParams<{ id: string }>();
   const { user } = useAuth();
   const { showToast } = useNotification();
   const navigate = useNavigate();
@@ -31,10 +37,46 @@ export const CreateListingPage: React.FC = () => {
   const [startingPriceRupees, setStartingPriceRupees] = useState<string>('');
   const [minIncrementRupees, setMinIncrementRupees] = useState<string>('50');
   const [durationHours, setDurationHours] = useState<string>('24');
+  const [closingDateTime, setClosingDateTime] = useState<string>('');
   const [photoUrl, setPhotoUrl] = useState<string>('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [editLoading, setEditLoading] = useState<boolean>(Boolean(editId));
+  const [existingListing, setExistingListing] = useState<Listing | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const isEditing = Boolean(editId);
+  const canEditAuctionTerms = !existingListing || existingListing.bidCount === 0;
+
+  useEffect(() => {
+    if (!editId) return;
+
+    const fetchListingForEdit = async () => {
+      try {
+        const response = await api.get<{ success: boolean; listings: Listing[] }>('/auctions/my/listings');
+        const listing = response.listings.find((item) => item.id === editId);
+        if (!listing) {
+          setError('Listing not found in your published listings.');
+          return;
+        }
+
+        setExistingListing(listing);
+        setTitle(listing.title);
+        setDescription(listing.description);
+        setCategory(listing.category);
+        setCondition(listing.condition);
+        setPhotos(listing.photos || []);
+        setStartingPriceRupees((listing.startingPricePaise / 100).toString());
+        setMinIncrementRupees((listing.minIncrementPaise / 100).toString());
+        setClosingDateTime(toDateTimeLocal(listing.closingTime));
+      } catch (err: any) {
+        setError(err.message || 'Failed to load listing for editing.');
+      } finally {
+        setEditLoading(false);
+      }
+    };
+
+    fetchListingForEdit();
+  }, [editId]);
 
   const samplePhotoPresets = [
     { label: 'Mountain Cycle', url: 'https://images.unsplash.com/photo-1485965120184-e220f721d03e?auto=format&fit=crop&w=800&q=80' },
@@ -64,14 +106,30 @@ export const CreateListingPage: React.FC = () => {
       return;
     }
 
-    if (!title || !description || !startingPriceRupees) {
-      setError('Please fill in title, description, and starting price.');
+    if (title.trim().length < 3 || title.trim().length > 120 || description.trim().length < 10 || description.trim().length > 2000) {
+      setError('Title must be 3–120 characters and description must be 10–2000 characters.');
       return;
     }
 
-    const price = parseInt(startingPriceRupees, 10);
-    if (isNaN(price) || price <= 0) {
-      setError('Starting price must be greater than ₹0.');
+    if (!isEditing || canEditAuctionTerms) {
+      const price = Number(startingPriceRupees);
+      const increment = Number(minIncrementRupees);
+      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(increment) || increment <= 0) {
+        setError('Starting price and minimum increment must be positive amounts.');
+        return;
+      }
+    }
+
+    if (isEditing && canEditAuctionTerms) {
+      const closingTimestamp = new Date(closingDateTime).getTime();
+      if (!Number.isFinite(closingTimestamp) || closingTimestamp <= Date.now()) {
+        setError('Auction closing time must be in the future.');
+        return;
+      }
+    }
+
+    if (isEditing && !existingListing) {
+      setError('Listing data is not available. Reload the page and try again.');
       return;
     }
 
@@ -79,20 +137,40 @@ export const CreateListingPage: React.FC = () => {
     setError(null);
 
     try {
-      const res = await api.post<{ success: boolean; listing: any; message: string }>('/auctions', {
-        title,
-        category,
-        condition,
-        description,
-        startingPrice: price,
-        minIncrement: parseInt(minIncrementRupees, 10) || 20,
-        durationHours: parseInt(durationHours, 10) || 24,
-        photos: photos.length > 0 ? photos : (photoUrl ? [photoUrl] : []),
-      });
+      if (isEditing && editId) {
+        const payload = canEditAuctionTerms
+          ? {
+              title: title.trim(),
+              description: description.trim(),
+              category,
+              condition,
+              startingPrice: Number(startingPriceRupees),
+              minIncrement: Number(minIncrementRupees),
+              closingTime: new Date(closingDateTime).toISOString(),
+              photos,
+            }
+          : { title: title.trim(), description: description.trim() };
+        const response = await api.put<{ success: boolean; message: string }>(`/auctions/${editId}`, payload);
+        if (response.success) {
+          showToast(response.message, 'success');
+          navigate('/my-listings');
+        }
+      } else {
+        const response = await api.post<{ success: boolean; listing: { _id: string }; message: string }>('/auctions', {
+          title: title.trim(),
+          category,
+          condition,
+          description: description.trim(),
+          startingPrice: Number(startingPriceRupees),
+          minIncrement: Number(minIncrementRupees) || 20,
+          durationHours: parseInt(durationHours, 10) || 24,
+          photos: photos.length > 0 ? photos : (photoUrl ? [photoUrl] : []),
+        });
 
-      if (res.success && res.listing) {
-        showToast('Auction published live to campus marketplace!', 'success');
-        navigate(`/auctions/${res.listing._id}`);
+        if (response.success && response.listing) {
+          showToast('Auction published live to campus marketplace!', 'success');
+          navigate(`/auctions/${response.listing._id}`);
+        }
       }
     } catch (err: any) {
       setError(err.message || 'Failed to publish auction listing.');
@@ -101,15 +179,32 @@ export const CreateListingPage: React.FC = () => {
     }
   };
 
+  if (isEditing && editLoading) {
+    return <div className="p-12 text-center text-sm text-slate-400">Loading listing for editing...</div>;
+  }
+
+  if (isEditing && !existingListing) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-12 text-center">
+        <p className="text-sm text-rose-700">{error || 'Listing could not be loaded for editing.'}</p>
+        <button type="button" onClick={() => navigate('/my-listings')} className="mt-4 text-sm font-bold text-indigo-600">
+          Return to My Listings
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full">
       <div className="mb-8">
         <span className="text-xs font-bold uppercase tracking-wider text-indigo-600">Sell on Campus</span>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight mt-1">
-          Create an Auction Listing
+          {isEditing ? 'Edit Auction Listing' : 'Create an Auction Listing'}
         </h1>
         <p className="text-xs sm:text-sm text-slate-500 mt-1">
-          Pass your belongings to juniors through transparent, peer-to-peer campus bidding.
+          {isEditing
+            ? 'Update your listing while keeping its auction and bidding history intact.'
+            : 'Pass your belongings to juniors through transparent, peer-to-peer campus bidding.'}
         </p>
       </div>
 
@@ -133,6 +228,7 @@ export const CreateListingPage: React.FC = () => {
             <input
               type="text"
               required
+              maxLength={120}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Hero Sprint 21-Speed Cycle with Basket and Lock"
@@ -148,6 +244,7 @@ export const CreateListingPage: React.FC = () => {
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as ListingCategory)}
+                disabled={isEditing && !canEditAuctionTerms}
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-none focus:border-indigo-600 transition font-medium"
               >
                 <option value="CYCLES">Bicycles & Mobility</option>
@@ -167,6 +264,7 @@ export const CreateListingPage: React.FC = () => {
               <select
                 value={condition}
                 onChange={(e) => setCondition(e.target.value as ListingCondition)}
+                disabled={isEditing && !canEditAuctionTerms}
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:bg-white focus:outline-none focus:border-indigo-600 transition font-medium"
               >
                 <option value="BRAND_NEW">Brand New (Unused / In Box)</option>
@@ -184,6 +282,7 @@ export const CreateListingPage: React.FC = () => {
             <textarea
               rows={4}
               required
+              maxLength={2000}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Describe age, functionality, accessories included, and preferred pickup spot (e.g. Student Center, Main Hostel Gate)..."
@@ -207,12 +306,14 @@ export const CreateListingPage: React.FC = () => {
                 type="url"
                 value={photoUrl}
                 onChange={(e) => setPhotoUrl(e.target.value)}
+                disabled={isEditing && !canEditAuctionTerms}
                 placeholder="https://example.com/item-photo.jpg"
                 className="flex-1 px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm focus:bg-white focus:outline-none focus:border-indigo-600 transition"
               />
               <button
                 type="button"
                 onClick={handleAddPhoto}
+                disabled={isEditing && !canEditAuctionTerms}
                 className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition"
               >
                 Add Photo
@@ -229,6 +330,7 @@ export const CreateListingPage: React.FC = () => {
                   <button
                     key={idx}
                     type="button"
+                    disabled={isEditing && !canEditAuctionTerms}
                     onClick={() => {
                       if (!photos.includes(preset.url)) setPhotos([...photos, preset.url]);
                     }}
@@ -249,6 +351,7 @@ export const CreateListingPage: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => handleRemovePhoto(idx)}
+                      disabled={isEditing && !canEditAuctionTerms}
                       className="absolute top-1 right-1 bg-slate-900/80 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition text-[10px]"
                     >
                       ✕
@@ -278,9 +381,11 @@ export const CreateListingPage: React.FC = () => {
                 <input
                   type="number"
                   min="1"
-                  required
+                  step="0.01"
+                  required={!isEditing || canEditAuctionTerms}
                   value={startingPriceRupees}
                   onChange={(e) => setStartingPriceRupees(e.target.value)}
+                  disabled={isEditing && !canEditAuctionTerms}
                   placeholder="e.g. 500"
                   className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:outline-none focus:border-indigo-600 transition"
                 />
@@ -298,9 +403,11 @@ export const CreateListingPage: React.FC = () => {
                 </span>
                 <input
                   type="number"
-                  min="5"
+                  min="0.01"
+                  step="0.01"
                   value={minIncrementRupees}
                   onChange={(e) => setMinIncrementRupees(e.target.value)}
+                  disabled={isEditing && !canEditAuctionTerms}
                   placeholder="e.g. 20"
                   className="w-full pl-8 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:outline-none focus:border-indigo-600 transition"
                 />
@@ -310,32 +417,45 @@ export const CreateListingPage: React.FC = () => {
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Auction Duration
+                {isEditing ? 'Auction Closing Time' : 'Auction Duration'}
               </label>
-              <select
-                value={durationHours}
-                onChange={(e) => setDurationHours(e.target.value)}
-                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:border-indigo-600 transition"
-              >
-                <option value="1">1 Hour (Flash Auction)</option>
-                <option value="6">6 Hours</option>
-                <option value="12">12 Hours</option>
-                <option value="24">24 Hours (Recommended)</option>
-                <option value="48">2 Days</option>
-                <option value="72">3 Days</option>
-              </select>
+              {isEditing ? (
+                <input
+                  type="datetime-local"
+                  value={closingDateTime}
+                  onChange={(e) => setClosingDateTime(e.target.value)}
+                  disabled={!canEditAuctionTerms}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:border-indigo-600 transition disabled:opacity-60"
+                />
+              ) : (
+                <select
+                  value={durationHours}
+                  onChange={(e) => setDurationHours(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:border-indigo-600 transition"
+                >
+                  <option value="1">1 Hour (Flash Auction)</option>
+                  <option value="6">6 Hours</option>
+                  <option value="12">12 Hours</option>
+                  <option value="24">24 Hours (Recommended)</option>
+                  <option value="48">2 Days</option>
+                  <option value="72">3 Days</option>
+                </select>
+              )}
             </div>
           </div>
 
           <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-100 text-xs text-indigo-900 leading-relaxed">
-            <strong>Campus Fair Rules:</strong> Price-sensitive fields cannot be modified once bidding begins. Soft-close anti-sniping (+60s) will automatically apply if bids arrive with &le;30s remaining.
+            <strong>Campus Fair Rules:</strong>{' '}
+            {isEditing && existingListing?.bidCount
+              ? 'Bidding has started. Only the title and description can be corrected; item details, photos, pricing, and closing time are locked.'
+              : 'Price-sensitive fields can only be modified before bidding begins. Active automatic bid authorizations cannot be exceeded. Soft-close anti-sniping (+60s) will automatically apply if bids arrive with ≤30s remaining.'}
           </div>
         </div>
 
         <div className="pt-4 flex justify-end gap-3 border-t border-slate-100">
           <button
             type="button"
-            onClick={() => navigate('/auctions')}
+            onClick={() => navigate(isEditing ? '/my-listings' : '/auctions')}
             className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
           >
             Cancel
@@ -346,7 +466,7 @@ export const CreateListingPage: React.FC = () => {
             className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-200 transition flex items-center gap-2 disabled:opacity-50"
           >
             <Gavel className="w-4 h-4" />
-            <span>{loading ? 'Publishing...' : 'Publish Campus Auction'}</span>
+            <span>{loading ? (isEditing ? 'Saving...' : 'Publishing...') : (isEditing ? 'Save Listing Changes' : 'Publish Campus Auction')}</span>
           </button>
         </div>
       </form>

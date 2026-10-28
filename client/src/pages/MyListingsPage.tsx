@@ -14,7 +14,8 @@ import {
   AlertCircle, 
   ArrowRight,
   Handshake,
-  Trash2
+  Trash2,
+  Pencil
 } from 'lucide-react';
 
 export const MyListingsPage: React.FC = () => {
@@ -188,6 +189,10 @@ export const MyListingsPage: React.FC = () => {
         <div className="space-y-4">
           {filteredListings.map((listing) => {
             const status = getStatusBadge(listing.status);
+            const isAuctionOpen = listing.status === 'ACTIVE' && new Date(listing.closingTime).getTime() > Date.now();
+            const editUnavailableReason = listing.status !== 'ACTIVE'
+              ? 'Only active auctions can be edited.'
+              : 'This auction has expired and can no longer be edited.';
             return (
               <div
                 key={listing.id}
@@ -232,7 +237,25 @@ export const MyListingsPage: React.FC = () => {
                 </div>
 
                 {/* Actions depending on status */}
-                <div className="flex items-center gap-2 self-end md:self-center">
+                <div className="flex flex-col items-end gap-2 self-end md:self-center">
+                  {isAuctionOpen ? (
+                    <Link
+                      to={`/sell/edit/${listing.id}`}
+                      className="px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Edit Listing
+                    </Link>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      title={editUnavailableReason}
+                      className="px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-100 text-slate-400 text-xs font-semibold cursor-not-allowed"
+                    >
+                      Edit Listing
+                    </button>
+                  )}
                   {listing.status === 'PENDING_SELLER_DECISION' && (
                     <div className="flex items-center gap-2">
                       <button
@@ -274,6 +297,16 @@ export const MyListingsPage: React.FC = () => {
                   >
                     View Listing
                   </Link>
+                  {isAuctionOpen && listing.bidCount > 0 && (
+                    <p className="text-[11px] text-amber-700 text-right max-w-64">
+                    Bids are active; only title and description can be corrected.
+                    </p>
+                  )}
+                  {!isAuctionOpen && (
+                    <p className="text-[11px] text-slate-500 text-right max-w-64">
+                      {editUnavailableReason}
+                    </p>
+                  )}
                 </div>
               </div>
             );

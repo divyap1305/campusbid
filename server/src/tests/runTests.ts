@@ -9,6 +9,7 @@ import { Bid } from '../models/Bid.js';
 import { AutoBidSetting } from '../models/AutoBidSetting.js';
 import { SavedSearch } from '../models/SavedSearch.js';
 import { Notification } from '../models/Notification.js';
+import { AuditLog } from '../models/AuditLog.js';
 import { HandoverRecord } from '../models/HandoverRecord.js';
 import { AIActionConsent } from '../models/AIActionConsent.js';
 import { connectDB } from '../config/db.js';
@@ -57,6 +58,7 @@ const runTests = async () => {
       Notification.deleteMany({}),
       HandoverRecord.deleteMany({}),
       AIActionConsent.deleteMany({}),
+      AuditLog.deleteMany({}),
     ]);
 
     // Verify registration, login, listing API access, and public seller-data sanitization.
@@ -74,7 +76,17 @@ const runTests = async () => {
       listing?: {
         _id?: string;
         id?: string;
+        title?: string;
+        description?: string;
+        category?: string;
+        condition?: string;
+        photos?: string[];
+        startingPricePaise?: number;
+        minIncrementPaise?: number;
         currentPricePaise?: number;
+        closingTime?: string;
+        originalClosingTime?: string;
+        bidCount?: number;
         seller?: { email?: string; phoneNumber?: string };
       };
       listings?: Array<{ _id?: string; id?: string }>;
@@ -195,6 +207,132 @@ const runTests = async () => {
       updatedPublicListing.body.listing?.currentPricePaise === rupeesToPaise(1000),
       'API rejects seller and below-increment bids and publishes the accepted highest bid'
     );
+
+    const editableListing = await apiRequest('/auctions', 'POST', {
+      title: '[TEST] Listing Edit Workflow',
+      category: 'CYCLES',
+      description: 'Original listing description for edit tests.',
+      condition: 'GOOD',
+      startingPrice: 1200,
+      minIncrement: 50,
+      durationHours: 24,
+      photos: [],
+    }, sellerLogin.body.token);
+    const editableListingId = editableListing.body.listing?._id;
+    const editedClosingTime = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+    const allowedEdit = editableListingId
+      ? await apiRequest(`/auctions/${editableListingId}`, 'PUT', {
+          title: 'Updated Cycle Listing',
+          description: 'Updated item details and campus pickup information.',
+          category: 'CALCULATORS',
+          condition: 'LIKE_NEW',
+          photos: ['https://example.com/campusbid-test-item.jpg'],
+          startingPrice: 1300,
+          minIncrement: 75,
+          closingTime: editedClosingTime,
+        }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const editAudit = editableListingId
+      ? await AuditLog.findOne({ entityType: 'LISTING', entityId: editableListingId, event: 'LISTING_UPDATED' })
+      : null;
+    assert(
+      editableListing.status === 201 &&
+      allowedEdit.status === 200 &&
+      allowedEdit.body.listing?.title === 'Updated Cycle Listing' &&
+      allowedEdit.body.listing?.category === 'CALCULATORS' &&
+      allowedEdit.body.listing?.condition === 'LIKE_NEW' &&
+      allowedEdit.body.listing?.photos?.[0] === 'https://example.com/campusbid-test-item.jpg' &&
+      allowedEdit.body.listing?.startingPricePaise === rupeesToPaise(1300) &&
+      allowedEdit.body.listing?.currentPricePaise === rupeesToPaise(1300) &&
+      allowedEdit.body.listing?.minIncrementPaise === rupeesToPaise(75) &&
+      new Date(allowedEdit.body.listing?.closingTime || 0).getTime() === new Date(editedClosingTime).getTime() &&
+      new Date(allowedEdit.body.listing?.originalClosingTime || 0).getTime() === new Date(editedClosingTime).getTime() &&
+      !!editAudit,
+      'Seller can update all permitted fields on an active zero-bid listing and an audit log is written'
+    );
+
+    await AutoBidSetting.create({
+      listing: editableListingId,
+      bidder: buyerLogin.body.user?.id,
+      maxAuthorizedPaise: rupeesToPaise(1350),
+      isActive: true,
+    });
+    const editBeyondAutoBidCeiling = editableListingId
+      ? await apiRequest(`/auctions/${editableListingId}`, 'PUT', {
+          startingPrice: 1400,
+        }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const listingAfterAutoBidEditAttempt = editableListingId
+      ? await apiRequest(`/auctions/${editableListingId}`)
+      : { status: 0, body: {} as ApiResult };
+    assert(
+      editBeyondAutoBidCeiling.status === 400 &&
+      listingAfterAutoBidEditAttempt.body.listing?.startingPricePaise === rupeesToPaise(1300),
+      'Starting price edits cannot exceed an existing automatic bidder authorization'
+    );
+
+    const unauthorizedEdit = editableListingId
+      ? await apiRequest(`/auctions/${editableListingId}`, 'PUT', {
+          title: 'Unauthorized edit attempt',
+        }, buyerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    assert(unauthorizedEdit.status === 403, 'A different seller cannot edit the listing');
+
+    const editedListingId = createdListingId;
+    const textCorrectionAfterBid = editedListingId
+      ? await apiRequest(`/auctions/${editedListingId}`, 'PUT', {
+          title: 'Corrected Auction Title',
+          description: 'Corrected listing details after the first valid bid.',
+        }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const lockedFieldsAfterBid = editedListingId
+      ? await apiRequest(`/auctions/${editedListingId}`, 'PUT', {
+          category: 'CALCULATORS',
+          photos: [],
+          startingPrice: 1,
+          minIncrement: 1,
+          closingTime: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const prohibitedServerField = editedListingId
+      ? await apiRequest(`/auctions/${editedListingId}`, 'PUT', { status: 'COMPLETED' }, sellerLogin.body.token)
+      : { status: 0, body: {} as ApiResult };
+    const listingAfterEditAttempts = editedListingId
+      ? await apiRequest(`/auctions/${editedListingId}`)
+      : { status: 0, body: {} as ApiResult };
+    const bidsAfterEditAttempts = editedListingId
+      ? await Bid.find({ listing: editedListingId })
+      : [];
+    assert(
+      textCorrectionAfterBid.status === 200 &&
+      lockedFieldsAfterBid.status === 400 &&
+      prohibitedServerField.status === 400 &&
+      listingAfterEditAttempts.body.listing?.currentPricePaise === rupeesToPaise(1000) &&
+      listingAfterEditAttempts.body.listing?.bidCount === 1 &&
+      bidsAfterEditAttempts.length === 1,
+      'After bidding only text corrections are accepted; locked fields and bid data remain unchanged'
+    );
+
+    const closedListingForEdit = await Listing.create({
+      title: '[TEST] Closed Listing Edit Rejection',
+      category: 'OTHER',
+      description: 'Closed listing for edit rejection.',
+      condition: 'GOOD',
+      photos: [],
+      startingPricePaise: rupeesToPaise(100),
+      minIncrementPaise: rupeesToPaise(10),
+      currentPricePaise: rupeesToPaise(100),
+      seller: sellerLogin.body.user?.id,
+      status: 'COMPLETED',
+      closingTime: new Date(Date.now() - 1000),
+      originalClosingTime: new Date(Date.now() - 1000),
+      bidCount: 0,
+      extensionCount: 0,
+    });
+    const closedEdit = await apiRequest(`/auctions/${closedListingForEdit._id}`, 'PUT', {
+      title: 'Cannot edit closed listing',
+    }, sellerLogin.body.token);
+    assert(closedEdit.status === 400, 'Closed auctions cannot be edited');
     // TEST 1: User Registration & Campus Eligibility
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash('Secret123', salt);

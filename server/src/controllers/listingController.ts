@@ -1,6 +1,8 @@
 import { Request, Response } from 'express';
 import { Listing, IListing } from '../models/Listing.js';
 import { Bid } from '../models/Bid.js';
+import { AuditLog } from '../models/AuditLog.js';
+import { AutoBidSetting } from '../models/AutoBidSetting.js';
 import { AuthRequest } from '../middleware/auth.js';
 import { checkSavedSearchesForListing } from '../services/savedSearchService.js';
 import { rupeesToPaise } from '../utils/currency.js';
@@ -112,6 +114,39 @@ export const updateListing = async (req: AuthRequest, res: Response): Promise<vo
     }
 
     const { id } = req.params;
+    if (!/^[a-f\d]{24}$/i.test(id)) {
+      res.status(400).json({ success: false, message: 'Invalid listing ID.' });
+      return;
+    }
+
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      res.status(400).json({ success: false, message: 'A valid listing update is required.' });
+      return;
+    }
+
+    const editableFields = [
+      'title',
+      'description',
+      'category',
+      'condition',
+      'photos',
+      'startingPrice',
+      'minIncrement',
+      'closingTime',
+    ];
+    const prohibitedFields = Object.keys(req.body).filter((field) => !editableFields.includes(field));
+    if (prohibitedFields.length > 0) {
+      res.status(400).json({
+        success: false,
+        message: `Unsupported listing fields: ${prohibitedFields.join(', ')}.`,
+      });
+      return;
+    }
+    if (Object.keys(req.body).length === 0) {
+      res.status(400).json({ success: false, message: 'At least one listing field must be provided.' });
+      return;
+    }
+
     const listing = await Listing.findById(id);
 
     if (!listing) {
@@ -124,49 +159,183 @@ export const updateListing = async (req: AuthRequest, res: Response): Promise<vo
       return;
     }
 
-    const { title, description, category, condition, startingPrice, minIncrement, photos } = req.body;
+    if (listing.status !== 'ACTIVE') {
+      res.status(400).json({
+        success: false,
+        message: `Listings with status ${listing.status} cannot be edited.`,
+      });
+      return;
+    }
+    if (listing.closingTime.getTime() <= Date.now()) {
+      res.status(400).json({ success: false, message: 'Expired auctions cannot be edited.' });
+      return;
+    }
 
-    // RULE: Prevent unsafe changes to price-sensitive fields once bidding begins!
-    if (listing.bidCount > 0) {
-      if (startingPrice !== undefined || minIncrement !== undefined) {
-        res.status(400).json({
-          success: false,
-          message: 'Price-sensitive fields (starting price, minimum increment) cannot be modified after bidding has begun.',
-        });
+    const hasBids = listing.bidCount > 0;
+    const lockedFields = ['category', 'condition', 'photos', 'startingPrice', 'minIncrement', 'closingTime'];
+    if (hasBids && Object.keys(req.body).some((field) => lockedFields.includes(field))) {
+      res.status(400).json({
+        success: false,
+        message: 'After bidding begins, only the title and description may be corrected.',
+      });
+      return;
+    }
+
+    const updates: Record<string, unknown> = {};
+    const { title, description, category, condition, photos, startingPrice, minIncrement, closingTime } = req.body;
+
+    if (title !== undefined) {
+      if (typeof title !== 'string' || title.trim().length < 3 || title.trim().length > 120) {
+        res.status(400).json({ success: false, message: 'Title must be between 3 and 120 characters.' });
         return;
       }
+      updates.title = title.trim();
+    }
+    if (description !== undefined) {
+      if (typeof description !== 'string' || description.trim().length < 10 || description.trim().length > 2000) {
+        res.status(400).json({ success: false, message: 'Description must be between 10 and 2000 characters.' });
+        return;
+      }
+      updates.description = description.trim();
+    }
+
+    const categories = ['CYCLES', 'CALCULATORS', 'TEXTBOOKS', 'ELECTRONICS', 'DORM_LIVING', 'LAB_EQUIPMENT', 'OTHER'];
+    const conditions = ['BRAND_NEW', 'LIKE_NEW', 'GOOD', 'FAIR'];
+    if (category !== undefined) {
+      if (typeof category !== 'string' || !categories.includes(category)) {
+        res.status(400).json({ success: false, message: 'A valid listing category is required.' });
+        return;
+      }
+      updates.category = category;
+    }
+    if (condition !== undefined) {
+      if (typeof condition !== 'string' || !conditions.includes(condition)) {
+        res.status(400).json({ success: false, message: 'A valid listing condition is required.' });
+        return;
+      }
+      updates.condition = condition;
+    }
+    if (photos !== undefined) {
+      if (
+        !Array.isArray(photos) ||
+        photos.length > 10 ||
+        photos.some((photo) => {
+          if (typeof photo !== 'string' || photo.length > 2048) return true;
+          if (photo.startsWith('/uploads/')) return false;
+          try {
+            const parsed = new URL(photo);
+            return parsed.protocol !== 'http:' && parsed.protocol !== 'https:';
+          } catch {
+            return true;
+          }
+        })
+      ) {
+        res.status(400).json({ success: false, message: 'Photos must contain up to 10 valid image URLs.' });
+        return;
+      }
+      updates.photos = photos;
+    }
+
+    if (listing.bidCount > 0) {
+      // Text corrections are the only permitted changes after the first bid.
     } else {
       if (startingPrice !== undefined) {
-        const newStartPaise = rupeesToPaise(Number(startingPrice));
-        if (!Number.isSafeInteger(newStartPaise) || newStartPaise <= 0) {
-          res.status(400).json({ success: false, message: 'Starting price must be a positive amount.' });
+        const priceRupees = Number(startingPrice);
+        const pricePaise = rupeesToPaise(priceRupees);
+        if (!Number.isFinite(priceRupees) || !Number.isSafeInteger(pricePaise) || pricePaise < 100) {
+          res.status(400).json({ success: false, message: 'Starting price must be at least ₹1.00.' });
           return;
         }
-        listing.startingPricePaise = newStartPaise;
-        listing.currentPricePaise = newStartPaise;
+        updates.startingPricePaise = pricePaise;
+        updates.currentPricePaise = pricePaise;
       }
       if (minIncrement !== undefined) {
-        const newIncrementPaise = rupeesToPaise(Number(minIncrement));
-        if (!Number.isSafeInteger(newIncrementPaise) || newIncrementPaise <= 0) {
-          res.status(400).json({ success: false, message: 'Minimum bid increment must be a positive amount.' });
+        const incrementRupees = Number(minIncrement);
+        const incrementPaise = rupeesToPaise(incrementRupees);
+        if (!Number.isFinite(incrementRupees) || !Number.isSafeInteger(incrementPaise) || incrementPaise <= 0) {
+          res.status(400).json({ success: false, message: 'Minimum bid increment must be at least one paise.' });
           return;
         }
-        listing.minIncrementPaise = newIncrementPaise;
+        updates.minIncrementPaise = incrementPaise;
+      }
+
+      if (startingPrice !== undefined || minIncrement !== undefined) {
+        const activeAutoBids = await AutoBidSetting.find({
+          listing: listing._id,
+          isActive: true,
+        }).select('maxAuthorizedPaise');
+        const resultingStartingPrice = (updates.startingPricePaise as number | undefined) ?? listing.startingPricePaise;
+        if (activeAutoBids.some((setting) => setting.maxAuthorizedPaise < resultingStartingPrice)) {
+          res.status(400).json({
+            success: false,
+            message: 'Price changes cannot exceed an active automatic bidder’s authorized maximum.',
+          });
+          return;
+        }
+      }
+
+      if (closingTime !== undefined) {
+        const newClosingTime = new Date(closingTime);
+        if (
+          typeof closingTime !== 'string' ||
+          Number.isNaN(newClosingTime.getTime()) ||
+          newClosingTime.getTime() <= Date.now()
+        ) {
+          res.status(400).json({ success: false, message: 'Closing time must be a valid future date and time.' });
+          return;
+        }
+        updates.closingTime = newClosingTime;
+        updates.originalClosingTime = newClosingTime;
       }
     }
 
-    if (title) listing.title = title.trim();
-    if (description) listing.description = description.trim();
-    if (category) listing.category = category;
-    if (condition) listing.condition = condition;
-    if (photos && Array.isArray(photos)) listing.photos = photos;
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ success: false, message: 'No editable listing changes were provided.' });
+      return;
+    }
 
-    await listing.save();
+    const updatedListing = await Listing.findOneAndUpdate(
+      {
+        _id: listing._id,
+        seller: req.user._id,
+        status: 'ACTIVE',
+        bidCount: listing.bidCount,
+        closingTime: { $gt: new Date() },
+      },
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+    if (!updatedListing) {
+      res.status(409).json({
+        success: false,
+        message: 'The auction changed while you were editing it. Reload and try again.',
+      });
+      return;
+    }
+
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    for (const field of Object.keys(updates)) {
+      before[field] = field in listing ? (listing as any)[field] : undefined;
+      after[field] = (updatedListing as any)[field];
+    }
+    try {
+      await AuditLog.create({
+        event: 'LISTING_UPDATED',
+        entityType: 'LISTING',
+        entityId: updatedListing._id,
+        actorId: req.user._id,
+        details: { before, after },
+        ipAddress: req.ip,
+      });
+    } catch (auditError) {
+      console.error('[Listing Audit Log Error] Listing updated but audit record failed:', auditError);
+    }
 
     res.json({
       success: true,
       message: 'Listing updated successfully.',
-      listing,
+      listing: updatedListing,
     });
   } catch (error: any) {
     console.error('[UpdateListing Error]', error);
