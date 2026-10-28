@@ -4,6 +4,16 @@ import path from 'path';
 import mongoose from 'mongoose';
 import { ENV } from './config/env.js';
 
+// Route imports
+import authRoutes from './routes/authRoutes.js';
+import listingRoutes from './routes/listingRoutes.js';
+import bidRoutes from './routes/bidRoutes.js';
+import sellerDecisionRoutes from './routes/sellerDecisionRoutes.js';
+import questionRoutes from './routes/questionRoutes.js';
+import savedSearchRoutes from './routes/savedSearchRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import aiRoutes from './routes/aiRoutes.js';
+
 export const createApp = (): Application => {
   const app = express();
 
@@ -32,6 +42,17 @@ export const createApp = (): Application => {
       dbState: mongoose.connection.readyState,
     });
   });
+
+  // Mount API Modules
+  app.use('/api/auth', authRoutes);
+  app.use('/api/auctions', listingRoutes);
+  app.use('/api/auctions', bidRoutes);
+  app.use('/api/auctions', sellerDecisionRoutes);
+  app.use('/api/auctions', questionRoutes);
+  app.use('/api', questionRoutes);
+  app.use('/api/saved-searches', savedSearchRoutes);
+  app.use('/api/notifications', notificationRoutes);
+  app.use('/api/ai', aiRoutes);
 
   // Global Error Handler
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
