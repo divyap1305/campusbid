@@ -76,6 +76,7 @@ const runTests = async () => {
     interface ApiResult {
       success?: boolean;
       message?: string;
+      unreadCount?: number;
       token?: string;
       user?: { id: string; email?: string };
       listing?: {
@@ -97,6 +98,14 @@ const runTests = async () => {
       listings?: Array<{ _id?: string; id?: string }>;
       consentRequest?: { consentToken: string };
       url?: string;
+      notifications?: Array<{
+        _id: string;
+        title: string;
+        message: string;
+        link: string;
+        isRead: boolean;
+        createdAt: string;
+      }>;
       question?: {
         _id?: string;
         id?: string;
@@ -158,6 +167,63 @@ const runTests = async () => {
       !!buyerLogin.body.token &&
       sellerLogin.body.user?.id !== buyerLogin.body.user?.id,
       'Register and log in as two distinct users through the API'
+    );
+
+    const inboxNotification = await Notification.create({
+      recipient: new mongoose.Types.ObjectId(buyerLogin.body.user?.id),
+      type: 'QUESTION_ANSWERED',
+      title: 'Seller answered your question',
+      message: 'The seller replied about pickup.',
+      link: '/auctions/example',
+    });
+    const buyerInbox = await apiRequest('/notifications', 'GET', undefined, buyerLogin.body.token);
+    const sellerInbox = await apiRequest('/notifications', 'GET', undefined, sellerLogin.body.token);
+    const invalidNotificationId = await apiRequest('/notifications/not-an-id/read', 'PUT', {}, buyerLogin.body.token);
+    const anotherUsersNotification = await apiRequest(
+      `/notifications/${inboxNotification._id}/read`,
+      'PUT',
+      {},
+      sellerLogin.body.token
+    );
+    const markedNotification = await apiRequest(
+      `/notifications/${inboxNotification._id}/read`,
+      'PUT',
+      {},
+      buyerLogin.body.token
+    );
+    const markedNotificationAgain = await apiRequest(
+      `/notifications/${inboxNotification._id}/read`,
+      'PUT',
+      {},
+      buyerLogin.body.token
+    );
+    const secondInboxNotification = await Notification.create({
+      recipient: new mongoose.Types.ObjectId(buyerLogin.body.user?.id),
+      type: 'OUTBID',
+      title: 'You were outbid',
+      message: 'A new bid was placed.',
+      link: '/auctions/example',
+    });
+    const markAllNotifications = await apiRequest('/notifications/read-all', 'PUT', {}, buyerLogin.body.token);
+    const buyerInboxAfterRead = await apiRequest('/notifications', 'GET', undefined, buyerLogin.body.token);
+    assert(
+      buyerInbox.status === 200 &&
+      buyerInbox.body.notifications?.some((notification) =>
+        notification._id === inboxNotification._id.toString() &&
+        notification.isRead === false &&
+        !!notification.createdAt
+      ) === true &&
+      sellerInbox.body.notifications?.some((notification) => notification._id === inboxNotification._id.toString()) !== true &&
+      invalidNotificationId.status === 400 &&
+      anotherUsersNotification.status === 404 &&
+      markedNotification.status === 200 &&
+      markedNotification.body.unreadCount === 0 &&
+      markedNotificationAgain.status === 200 &&
+      secondInboxNotification.isRead === false &&
+      markAllNotifications.status === 200 &&
+      markAllNotifications.body.unreadCount === 0 &&
+      buyerInboxAfterRead.body.notifications?.every((notification) => notification.isRead) === true,
+      'Notification inbox data is complete, read actions are owner-scoped and idempotent, and unread counts reconcile'
     );
 
     const savedRangeResponse = await apiRequest('/saved-searches', 'POST', {

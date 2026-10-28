@@ -31,11 +31,13 @@ export const sendNotification = async ({
     // Real-time Socket.IO emission to user room
     if (io) {
       io.to(`user:${recipientId}`).emit('new_notification', {
-        id: notification._id,
+        _id: notification._id.toString(),
         type: notification.type,
         title: notification.title,
         message: notification.message,
         link: notification.link,
+        isRead: notification.isRead,
+        metadata: notification.metadata,
         createdAt: notification.createdAt,
       });
     }

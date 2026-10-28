@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useNotification } from '../context/NotificationContext.js';
 import { Bell, Check, Volume2, ShieldCheck, ArrowRight } from 'lucide-react';
@@ -13,6 +13,11 @@ export const NotificationsPage: React.FC = () => {
     browserNotificationsEnabled 
   } = useNotification();
   const navigate = useNavigate();
+  const [unreadOnly, setUnreadOnly] = useState<boolean>(false);
+  const visibleNotifications = useMemo(
+    () => unreadOnly ? notifications.filter((notification) => !notification.isRead) : notifications,
+    [notifications, unreadOnly]
+  );
 
   return (
     <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full">
@@ -28,6 +33,26 @@ export const NotificationsPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-pressed={!unreadOnly}
+            onClick={() => setUnreadOnly(false)}
+            className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
+              !unreadOnly ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+            }`}
+          >
+            All ({notifications.length})
+          </button>
+          <button
+            type="button"
+            aria-pressed={unreadOnly}
+            onClick={() => setUnreadOnly(true)}
+            className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
+              unreadOnly ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'
+            }`}
+          >
+            Unread ({unreadCount})
+          </button>
           {!browserNotificationsEnabled && (
             <button
               onClick={requestBrowserNotifications}
@@ -51,16 +76,20 @@ export const NotificationsPage: React.FC = () => {
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-sm overflow-hidden divide-y divide-slate-100">
-        {notifications.length === 0 ? (
+        {visibleNotifications.length === 0 ? (
           <div className="p-16 text-center text-slate-400 space-y-2">
             <Bell className="w-12 h-12 text-slate-300 mx-auto" />
-            <h3 className="font-bold text-slate-800 text-base">No notifications yet</h3>
+            <h3 className="font-bold text-slate-800 text-base">
+              {unreadOnly && notifications.length > 0 ? 'You are all caught up' : 'No notifications yet'}
+            </h3>
             <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              When someone outbids you or an auction you're watching closes, you'll see instant alerts here.
+              {unreadOnly && notifications.length > 0
+                ? 'There are no unread notifications.'
+                : "When someone outbids you or an auction you're watching closes, you'll see instant alerts here."}
             </p>
           </div>
         ) : (
-          notifications.map((n) => (
+          visibleNotifications.map((n) => (
             <div
               key={n._id}
               onClick={() => {

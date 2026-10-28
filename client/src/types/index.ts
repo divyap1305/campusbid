@@ -105,6 +105,7 @@ export interface NotificationItem {
   link: string;
   isRead: boolean;
   createdAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface HandoverRecord {

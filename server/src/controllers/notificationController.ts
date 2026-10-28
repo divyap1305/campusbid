@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { Notification } from '../models/Notification.js';
 import { AuthRequest } from '../middleware/auth.js';
 
+const isValidObjectId = (id: string): boolean => /^[a-f\d]{24}$/i.test(id);
+
 export const getNotifications = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     if (!req.user) {
@@ -33,9 +35,26 @@ export const markAsRead = async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const { id } = req.params;
-    await Notification.findOneAndUpdate({ _id: id, recipient: req.user._id }, { isRead: true });
+    if (!isValidObjectId(id)) {
+      res.status(400).json({ success: false, message: 'Invalid notification ID.' });
+      return;
+    }
 
-    res.json({ success: true, message: 'Notification marked as read.' });
+    const notification = await Notification.findOneAndUpdate(
+      { _id: id, recipient: req.user._id, isRead: false },
+      { isRead: true },
+      { new: true }
+    );
+    if (!notification) {
+      const existing = await Notification.exists({ _id: id, recipient: req.user._id });
+      if (!existing) {
+        res.status(404).json({ success: false, message: 'Notification not found.' });
+        return;
+      }
+    }
+
+    const unreadCount = await Notification.countDocuments({ recipient: req.user._id, isRead: false });
+    res.json({ success: true, message: 'Notification marked as read.', unreadCount });
   } catch (error: any) {
     console.error('[MarkAsRead Error]', error);
     res.status(500).json({ success: false, message: 'Failed to update notification.' });
@@ -51,7 +70,7 @@ export const markAllAsRead = async (req: AuthRequest, res: Response): Promise<vo
 
     await Notification.updateMany({ recipient: req.user._id, isRead: false }, { isRead: true });
 
-    res.json({ success: true, message: 'All notifications marked as read.' });
+    res.json({ success: true, message: 'All notifications marked as read.', unreadCount: 0 });
   } catch (error: any) {
     console.error('[MarkAllAsRead Error]', error);
     res.status(500).json({ success: false, message: 'Failed to update notifications.' });
