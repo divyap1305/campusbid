@@ -97,6 +97,25 @@ export interface SavedSearch {
   createdAt: string;
 }
 
+export interface WatchlistItem {
+  id: string;
+  createdAt: string;
+  listing: {
+    id: string;
+    title: string;
+    category: ListingCategory;
+    description: string;
+    condition: ListingCondition;
+    photos: string[];
+    currentPricePaise: number;
+    startingPricePaise: number;
+    status: AuctionStatus;
+    closingTime: string;
+    bidCount: number;
+    seller?: { id: string; name: string; department?: string };
+  } | null;
+}
+
 export interface NotificationItem {
   _id: string;
   type: string;

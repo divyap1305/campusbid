@@ -15,6 +15,7 @@ import { AuditLog } from '../models/AuditLog.js';
 import { HandoverRecord } from '../models/HandoverRecord.js';
 import { AIActionConsent } from '../models/AIActionConsent.js';
 import { AuctionQuestion } from '../models/AuctionQuestion.js';
+import { AuctionWatch } from '../models/AuctionWatch.js';
 import { connectDB } from '../config/db.js';
 import { placeBid, resolveProxyBids } from '../services/auctionService.js';
 import {
@@ -25,6 +26,7 @@ import {
   recordFailedPickup,
 } from '../services/closureService.js';
 import { checkSavedSearchesForListing } from '../services/savedSearchService.js';
+import { notifyWatchersOfPriceChange, sendClosingSoonWatchlistAlerts } from '../services/watchlistService.js';
 import { processAIRequest } from '../services/aiAssistantService.js';
 import { rupeesToPaise } from '../utils/currency.js';
 import bcrypt from 'bcryptjs';
@@ -61,6 +63,7 @@ const runTests = async () => {
       Notification.deleteMany({}),
       HandoverRecord.deleteMany({}),
       AIActionConsent.deleteMany({}),
+      AuctionWatch.deleteMany({}),
       AuctionQuestion.deleteMany({}),
       AuditLog.deleteMany({}),
     ]);
@@ -119,6 +122,8 @@ const runTests = async () => {
         answerEditedAt?: string;
       }>;
       savedSearch?: { _id?: string; minPricePaise?: number; maxPricePaise?: number; closingSoon?: boolean };
+      watchlist?: Array<{ id?: string; listing?: { id?: string; title?: string; seller?: { email?: string } } | null }>;
+      isWatching?: boolean;
     }
     const apiRequest = async (
       endpoint: string,
@@ -1059,6 +1064,79 @@ const runTests = async () => {
       consentExecution.body.success === true &&
       executedConsent?.status === 'EXECUTED',
       'AI consent execution is explicit, succeeds for its owner, and rejects another user'
+    );
+
+    matchingListing.closingTime = new Date(Date.now() + 20 * 60 * 1000);
+    await matchingListing.save();
+    const watchId = matchingListing._id.toString();
+    const buyerWatchAdded = await apiRequest(`/watchlist/${watchId}`, 'POST', undefined, buyerLogin.body.token);
+    const duplicateWatch = await apiRequest(`/watchlist/${watchId}`, 'POST', undefined, buyerLogin.body.token);
+    const buyerWatchStatus = await apiRequest(`/watchlist/${watchId}`, 'GET', undefined, buyerLogin.body.token);
+    const sellerWatchStatus = await apiRequest(`/watchlist/${watchId}`, 'GET', undefined, sellerLogin.body.token);
+    const buyerWatchlist = await apiRequest('/watchlist', 'GET', undefined, buyerLogin.body.token);
+    const foreignWatchRemoval = await apiRequest(`/watchlist/${watchId}`, 'DELETE', undefined, sellerLogin.body.token);
+    const invalidWatchId = await apiRequest('/watchlist/not-an-id', 'POST', undefined, buyerLogin.body.token);
+    const unauthenticatedWatchlist = await apiRequest('/watchlist');
+    assert(
+      buyerWatchAdded.status === 201 &&
+      duplicateWatch.status === 200 &&
+      buyerWatchStatus.body.isWatching === true &&
+      sellerWatchStatus.body.isWatching === false &&
+      buyerWatchlist.body.watchlist?.some((entry) => entry.listing?.id === watchId) === true &&
+      buyerWatchlist.body.watchlist?.[0]?.listing?.seller?.email === undefined &&
+      foreignWatchRemoval.status === 404 &&
+      invalidWatchId.status === 400 &&
+      unauthenticatedWatchlist.status === 401,
+      'Watchlist API is authenticated, idempotent, validates IDs, and scopes entries to each user',
+      JSON.stringify({
+        add: buyerWatchAdded.status,
+        duplicate: duplicateWatch.status,
+        buyerWatching: buyerWatchStatus.body.isWatching,
+        sellerWatching: sellerWatchStatus.body.isWatching,
+        watchlist: buyerWatchlist.body.watchlist,
+        foreignRemoval: foreignWatchRemoval.status,
+        invalidId: invalidWatchId.status,
+        unauthenticated: unauthenticatedWatchlist.status,
+      })
+    );
+
+    await AuctionWatch.create({ user: buyer1._id, listing: matchingListing._id });
+    await notifyWatchersOfPriceChange(watchId, rupeesToPaise(475), buyer1._id.toString());
+    const bidderPriceAlerts = await Notification.countDocuments({
+      recipient: buyer1._id,
+      type: 'WATCHLIST_PRICE_UPDATE',
+    });
+    const otherWatcherPriceAlerts = await Notification.countDocuments({
+      recipient: buyerLogin.body.user!.id,
+      type: 'WATCHLIST_PRICE_UPDATE',
+      'metadata.listingId': watchId,
+    });
+    await sendClosingSoonWatchlistAlerts(new Date());
+    await sendClosingSoonWatchlistAlerts(new Date());
+    const buyerClosingAlerts = await Notification.countDocuments({
+      recipient: buyerLogin.body.user!.id,
+      type: 'AUCTION_CLOSING_SOON',
+      'metadata.listingId': watchId,
+    });
+    const sellerClosingAlerts = await Notification.countDocuments({
+      recipient: sellerLogin.body.user!.id,
+      type: 'AUCTION_CLOSING_SOON',
+      'metadata.listingId': watchId,
+    });
+    assert(
+      bidderPriceAlerts === 0 &&
+      otherWatcherPriceAlerts === 1 &&
+      buyerClosingAlerts === 1 &&
+      sellerClosingAlerts === 0,
+      'Watchlist sends bid-price alerts to other watchers and a single 30-minute closing reminder',
+      JSON.stringify({ bidderPriceAlerts, otherWatcherPriceAlerts, buyerClosingAlerts, sellerClosingAlerts })
+    );
+
+    const buyerWatchRemoved = await apiRequest(`/watchlist/${watchId}`, 'DELETE', undefined, buyerLogin.body.token);
+    const buyerWatchAfterRemoval = await apiRequest(`/watchlist/${watchId}`, 'GET', undefined, buyerLogin.body.token);
+    assert(
+      buyerWatchRemoved.body.success === true && buyerWatchAfterRemoval.body.isWatching === false,
+      'Users can remove their own auctions from the watchlist'
     );
 
     await new Promise<void>((resolve, reject) => {

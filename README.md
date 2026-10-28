@@ -20,6 +20,7 @@ CampusBid is a real-time, transparent campus auction marketplace designed for co
 - **Campus Community Features**:
   - Public Q&A thread for every item.
   - Saved searches with automated alert notifications.
+  - Auction watchlists with bid-price updates and a one-time reminder 30 minutes before closing.
   - In-app notification center + Browser Notification API support.
 - **AI Campus Assistant**:
   - Natural language search and item attribute comparisons across genuine active listings.

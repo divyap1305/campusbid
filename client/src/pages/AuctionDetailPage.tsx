@@ -26,7 +26,8 @@ import {
   Share2, 
   Send,
   HelpCircle,
-  AlertTriangle
+  AlertTriangle,
+  Heart,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -41,6 +42,8 @@ export const AuctionDetailPage: React.FC = () => {
   const [bids, setBids] = useState<Bid[]>([]);
   const [questions, setQuestions] = useState<AuctionQuestion[]>([]);
   const [myAutoBid, setMyAutoBid] = useState<{ maxAuthorizedPaise: number } | null>(null);
+  const [isWatching, setIsWatching] = useState(false);
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,6 +78,7 @@ export const AuctionDetailPage: React.FC = () => {
     setBids([]);
     setQuestions([]);
     setMyAutoBid(null);
+    setIsWatching(false);
 
     let loadedListing: Listing;
     try {
@@ -115,6 +119,13 @@ export const AuctionDetailPage: React.FC = () => {
     }
 
     if (user) {
+      try {
+        const watchRes = await api.get<{ success: boolean; isWatching: boolean }>(`/watchlist/${id}`);
+        setIsWatching(watchRes.isWatching);
+      } catch (err) {
+        console.error('[Auction Detail] Failed to load watchlist status:', err);
+      }
+
       try {
         const autoRes = await api.get<{ success: boolean; autoBid: any }>(
           `/auctions/${id}/auto-bid`
@@ -353,6 +364,26 @@ export const AuctionDetailPage: React.FC = () => {
       showToast('Automatic bidding authorization revoked.', 'info');
     } catch (err: any) {
       showToast(err.message || 'Failed to revoke auto-bid.', 'error');
+    }
+  };
+
+  const handleToggleWatchlist = async () => {
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+
+    setWatchlistLoading(true);
+    try {
+      const response = isWatching
+        ? await api.del<{ success: boolean; message: string; isWatching: boolean }>(`/watchlist/${listing.id}`)
+        : await api.post<{ success: boolean; message: string; isWatching: boolean }>(`/watchlist/${listing.id}`);
+      setIsWatching(response.isWatching);
+      showToast(response.message, isWatching ? 'info' : 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update your watchlist.', 'error');
+    } finally {
+      setWatchlistLoading(false);
     }
   };
 
@@ -710,6 +741,23 @@ export const AuctionDetailPage: React.FC = () => {
         <div className="lg:col-span-5 space-y-6">
           {/* Bidding Terminal Card */}
           <div className="bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-7 shadow-lg shadow-indigo-50/50 space-y-6 sticky top-24">
+            {!isSeller &&
+              listing.status === 'ACTIVE' &&
+              new Date(listing.closingTime).getTime() > Date.now() && (
+              <button
+                onClick={() => void handleToggleWatchlist()}
+                disabled={watchlistLoading}
+                className={`w-full py-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-2 disabled:opacity-50 ${
+                  isWatching
+                    ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
+                    : 'bg-white border-slate-200 text-slate-700 hover:border-rose-300 hover:text-rose-700'
+                }`}
+              >
+                <Heart className={`w-4 h-4 ${isWatching ? 'fill-current' : ''}`} />
+                {watchlistLoading ? 'Updating...' : isWatching ? 'Watching auction · Remove' : 'Watch auction'}
+              </button>
+            )}
+
             {/* Live Countdown Banner */}
             <div className="p-4 rounded-2xl bg-slate-900 text-white flex items-center justify-between">
               <div>

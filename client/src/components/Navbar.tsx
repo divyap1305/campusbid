@@ -17,7 +17,8 @@ import {
   Volume2, 
   Menu, 
   X,
-  ShieldCheck
+  ShieldCheck,
+  Heart,
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
@@ -116,6 +117,15 @@ export const Navbar: React.FC = () => {
             <Bookmark className="w-4 h-4 text-slate-400" />
             <span>Saved Searches</span>
           </Link>
+          {user && (
+            <Link
+              to="/watchlist"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold text-slate-600 hover:text-indigo-600 hover:bg-slate-50 transition"
+            >
+              <Heart className="w-4 h-4 text-slate-400" />
+              <span>Watchlist</span>
+            </Link>
+          )}
         </div>
 
         {/* Right CTA & Account */}
@@ -349,6 +359,15 @@ export const Navbar: React.FC = () => {
             >
               Saved Searches
             </Link>
+            {user && (
+              <Link
+                to="/watchlist"
+                onClick={() => setMobileMenuOpen(false)}
+                className="p-2.5 rounded-xl bg-rose-50 text-rose-700 text-center"
+              >
+                Watchlist
+              </Link>
+            )}
             <Link
               to="/my-listings"
               onClick={() => setMobileMenuOpen(false)}

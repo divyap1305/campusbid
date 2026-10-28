@@ -1,6 +1,6 @@
 import { Listing } from '../models/Listing.js';
 import { closeAuction } from './closureService.js';
-import { sendNotification } from './notificationService.js';
+import { sendClosingSoonWatchlistAlerts } from './watchlistService.js';
 
 let isRunning = false;
 
@@ -24,6 +24,8 @@ export const processExpiredAuctions = async (): Promise<void> => {
         console.error(`[Scheduler Error] Failed to close auction ${listing._id}:`, err);
       }
     }
+
+    await sendClosingSoonWatchlistAlerts(now);
   } catch (error) {
     console.error('[Scheduler Error] Expired auction scan failed:', error);
   } finally {

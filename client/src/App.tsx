@@ -21,6 +21,7 @@ import { AIAssistantPage } from './pages/AIAssistantPage.js';
 import { NotificationsPage } from './pages/NotificationsPage.js';
 import { HandoverPage } from './pages/HandoverPage.js';
 import { ProfilePage } from './pages/ProfilePage.js';
+import { WatchlistPage } from './pages/WatchlistPage.js';
 
 // Protected Route wrapper
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -88,6 +89,14 @@ export default function App() {
                     element={
                       <ProtectedRoute>
                         <SavedSearchesPage />
+                      </ProtectedRoute>
+                    }
+                  />
+                  <Route
+                    path="/watchlist"
+                    element={
+                      <ProtectedRoute>
+                        <WatchlistPage />
                       </ProtectedRoute>
                     }
                   />

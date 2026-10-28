@@ -12,6 +12,7 @@ export type NotificationType =
   | 'QUESTION_ASKED'
   | 'QUESTION_ANSWERED'
   | 'SAVED_SEARCH_MATCH'
+  | 'WATCHLIST_PRICE_UPDATE'
   | 'AUCTION_CLOSING_SOON';
 
 export interface INotification extends Document {

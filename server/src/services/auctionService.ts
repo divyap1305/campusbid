@@ -6,6 +6,7 @@ import { User } from '../models/User.js';
 import { sendNotification } from './notificationService.js';
 import { io } from '../index.js';
 import { paiseToRupees } from '../utils/currency.js';
+import { notifyWatchersOfPriceChange } from './watchlistService.js';
 
 export interface PlaceBidResult {
   success: boolean;
@@ -151,6 +152,12 @@ export const placeBid = async (
       metadata: { listingId, newPricePaise: amountPaise },
     });
   }
+
+  void notifyWatchersOfPriceChange(
+    listingId,
+    updatedListing.currentPricePaise,
+    bidderId
+  ).catch((error) => console.error('[Watchlist Price Alert Error]', error));
 
   // 10. Broadcast real-time Socket.IO event to all viewers
   if (io) {

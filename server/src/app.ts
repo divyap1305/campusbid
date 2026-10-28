@@ -14,6 +14,7 @@ import questionRoutes from './routes/questionRoutes.js';
 import savedSearchRoutes from './routes/savedSearchRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
+import watchlistRoutes from './routes/watchlistRoutes.js';
 
 export const createApp = (): Application => {
   const app = express();
@@ -60,6 +61,7 @@ export const createApp = (): Application => {
   app.use('/api/saved-searches', savedSearchRoutes);
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/ai', aiRoutes);
+  app.use('/api/watchlist', watchlistRoutes);
 
   // Global Error Handler
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {
